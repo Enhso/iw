@@ -72,9 +72,20 @@ impl ResearchWorker {
             .arg("--question")
             .arg(question);
         if let Some(fixture_dir) = &self.fixture_dir {
-            command.arg("--fixture-dir").arg(fixture_dir);
+            // `uv run --directory <python_dir>` changes the child's working
+            // directory to `python_dir`, so a relative `fixture_dir` would
+            // resolve against the wrong base. Resolve against this
+            // process's cwd first; `std::path::absolute` does not touch the
+            // filesystem, so a nonexistent directory still reaches the
+            // worker and surfaces as `ResearchError::Failed`.
+            let absolute_fixture_dir = std::path::absolute(fixture_dir)
+                .map_err(|err| ResearchError::Spawn(err.to_string()))?;
+            command.arg("--fixture-dir").arg(absolute_fixture_dir);
         }
-        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
 
         let child = command
             .spawn()
@@ -120,6 +131,7 @@ fn tail_chars(bytes: &[u8], max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     /// Returns this crate's manifest directory, the repository root.
     fn manifest_dir() -> PathBuf {
@@ -155,5 +167,54 @@ mod tests {
             }
             other => panic!("expected ResearchError::Failed, got {other:?}"),
         }
+    }
+
+    /// `cargo test` runs unit tests with the crate's manifest directory as
+    /// the working directory, so a relative `fixture_dir` here exercises
+    /// exactly the resolution `ResearchWorker::run` must perform: `uv run
+    /// --directory python` changes the child's cwd to `python/`, so the
+    /// relative path must be resolved against this process's cwd, not the
+    /// child's, before being passed to the worker.
+    #[tokio::test]
+    async fn relative_fixture_dir_is_resolved() {
+        let worker = ResearchWorker {
+            uv_bin: PathBuf::from("uv"),
+            python_dir: manifest_dir().join("python"),
+            fixture_dir: Some(PathBuf::from("fixtures/offline")),
+            timeout: Duration::from_secs(300),
+        };
+
+        let payload = worker
+            .run("Does a relative fixture dir resolve correctly?")
+            .await
+            .expect("relative fixture dir resolves");
+        assert_eq!(payload.claims.len(), 7);
+    }
+
+    #[tokio::test]
+    async fn timeout_returns_timeout_error() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let script_path = dir.path().join("iw-slow-uv-stub.sh");
+        std::fs::write(&script_path, "#!/bin/sh\nsleep 30\n").expect("write stub script");
+        let mut permissions = std::fs::metadata(&script_path)
+            .expect("stat stub script")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script_path, permissions).expect("chmod stub script");
+
+        let worker = ResearchWorker {
+            uv_bin: script_path,
+            python_dir: manifest_dir().join("python"),
+            fixture_dir: None,
+            timeout: Duration::from_millis(200),
+        };
+
+        let started = std::time::Instant::now();
+        let result = worker.run("does this time out?").await;
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "run() should return promptly once the timeout fires"
+        );
+        assert!(matches!(result, Err(ResearchError::Timeout(_))));
     }
 }

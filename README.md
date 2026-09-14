@@ -106,7 +106,7 @@ All variables are optional; each has a default.
 | `IW_DB_PATH`               | `data/iw.sqlite`      | Sqlite file path, used when `IW_DB_ENGINE=sqlite`.   |
 | `IW_UV_BIN`                | `uv`                  | Path to the `uv` binary.                             |
 | `IW_PYTHON_DIR`            | `python`              | The `uv`-managed worker project directory.           |
-| `IW_FIXTURE_DIR`           | unset (live mode)     | Offline fixture directory passed to the worker.      |
+| `IW_FIXTURE_DIR`           | unset (live mode)     | Offline fixture directory passed to the worker. May be relative to the server's working directory; resolved to an absolute path before being passed to the worker. |
 | `IW_WORKER_TIMEOUT_SECS`   | `300`                 | Seconds to wait for the worker before timing out.    |
 | `LLM_API_BASE`             | `https://api.openai.com/v1` | Read only by the Python worker, in live mode. |
 | `LLM_API_KEY`              | required in live mode | Read only by the Python worker, never by Rust.       |
