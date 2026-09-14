@@ -26,6 +26,14 @@ pub enum AppError {
     NotFound(String),
 }
 
+impl From<crate::store::StoreError> for AppError {
+    /// Wraps a graph store failure as `AppError::Store`, carrying the
+    /// store error's formatted message.
+    fn from(err: crate::store::StoreError) -> Self {
+        AppError::Store(err.to_string())
+    }
+}
+
 impl IntoResponse for AppError {
     /// Maps each variant to an HTTP status code and a JSON body of the form
     /// `{"error": "<message>"}`: `InvalidPayload` to 422, `Store` to 500,

@@ -9,3 +9,5 @@
 pub mod embed;
 pub mod error;
 pub mod model;
+pub mod schema;
+pub mod store;
