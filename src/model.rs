@@ -5,6 +5,8 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::embed::fnv1a64;
+
 const ENTITY_KINDS: &[&str] = &["person", "organization", "country", "technology", "policy"];
 const SOURCE_PROVIDERS: &[&str] = &["wikipedia", "arxiv"];
 const CLAIM_KINDS: &[&str] = &["hypothesis", "fact", "assumption"];
@@ -356,13 +358,24 @@ pub fn slugify(input: &str) -> String {
 }
 
 /// Builds a dossier id from a research question: `"dos:"` followed by the
-/// first 60 characters of `slugify(question)`, with any `-` left dangling
-/// by the truncation removed.
+/// first 60 characters of `slugify(question.trim())` (any `-` left
+/// dangling by the truncation removed, or the literal `"q"` if that slug
+/// is empty), a `-`, and the low 32 bits of the 64-bit FNV-1a hash of the
+/// trimmed question as 8 lowercase hex digits.
+///
+/// The hash disambiguates questions that would otherwise collide: two
+/// questions differing only after the 60-character truncation point, or
+/// two questions with no ASCII alphanumeric characters at all (which both
+/// slugify to `""`, falling back to `"q"`), no longer share a dossier. At
+/// most 73 characters (`4 + 60 + 1 + 8`).
 pub fn dossier_id_for(question: &str) -> String {
-    let slug = slugify(question);
+    let trimmed_question = question.trim();
+    let slug = slugify(trimmed_question);
     let truncated: String = slug.chars().take(60).collect();
-    let trimmed = truncated.trim_end_matches('-');
-    format!("dos:{trimmed}")
+    let truncated = truncated.trim_end_matches('-');
+    let slug = if truncated.is_empty() { "q" } else { truncated };
+    let hash = fnv1a64(trimmed_question) as u32;
+    format!("dos:{slug}-{hash:08x}")
 }
 
 /// Checks that `id` matches the Global Constraint 10 format for a list
@@ -652,19 +665,52 @@ mod tests {
         assert_eq!(slugify("  TSMC & ASML: EUV!! "), "tsmc-asml-euv");
     }
 
-    #[test]
-    fn dossier_id_for_truncates_long_slug_to_60_chars() {
-        let question = "a".repeat(100);
-        let id = dossier_id_for(&question);
-        assert_eq!(id, format!("dos:{}", "a".repeat(60)));
+    /// Returns whether every character in `s` is an ASCII digit or a
+    /// lowercase hex letter (`a`-`f`).
+    fn is_lowercase_hex(s: &str) -> bool {
+        s.chars().all(|ch| matches!(ch, '0'..='9' | 'a'..='f'))
     }
 
     #[test]
-    fn dossier_id_for_strips_trailing_dash_left_by_truncation() {
-        let question = format!("{} {}", "a".repeat(59), "b".repeat(10));
+    fn dossier_id_for_is_stable_and_ignores_surrounding_whitespace() {
+        let question = "Can export controls durably slow China's access to advanced \
+                         semiconductor manufacturing capability?";
+        let id = dossier_id_for(question);
+        assert_eq!(id, dossier_id_for(question));
+        assert_eq!(id, dossier_id_for(&format!("  {question}  \n")));
+    }
+
+    #[test]
+    fn dossier_id_for_disambiguates_similar_questions() {
+        let semiconductors = dossier_id_for(
+            "Can export controls durably slow China's access to advanced semiconductor \
+             manufacturing capability?",
+        );
+        let accelerators = dossier_id_for(
+            "Can export controls durably slow China's access to advanced AI accelerators?",
+        );
+        assert_ne!(semiconductors, accelerators);
+    }
+
+    #[test]
+    fn dossier_id_for_long_question_stays_within_73_chars_with_hex_hash_suffix() {
+        let question = "a".repeat(200);
         let id = dossier_id_for(&question);
-        assert_eq!(id, format!("dos:{}", "a".repeat(59)));
-        assert!(!id.ends_with('-'));
+        assert!(id.len() <= 73, "id too long: {id} ({} chars)", id.len());
+        let (_, hash) = id.rsplit_once('-').expect("id has a `-<hash>` suffix");
+        assert_eq!(hash.len(), 8);
+        assert!(is_lowercase_hex(hash), "hash not lowercase hex: {hash}");
+    }
+
+    #[test]
+    fn dossier_id_for_non_latin_question_falls_back_to_q_slug() {
+        let question = "هل ستبطئ ضوابط التصدير وصول الصين إلى الرقائق المتقدمة؟";
+        let id = dossier_id_for(question);
+        let hash = id
+            .strip_prefix("dos:q-")
+            .unwrap_or_else(|| panic!("id should start with dos:q-, got: {id}"));
+        assert_eq!(hash.len(), 8);
+        assert!(is_lowercase_hex(hash), "hash not lowercase hex: {hash}");
     }
 
     #[test]
