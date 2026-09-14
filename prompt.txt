@@ -1,0 +1,37 @@
+# TASK: Build Intelligence Workbench — Phase 1 Vertical Slice
+
+We are building Phase 1 of the **Intelligence Workbench** (refer to `prd.md` for product requirements). 
+
+## 1. Architectural Pivot & Key Decisions
+Previous drafts considered Neo4j + Weaviate or a flat-file GitOps design. Both are superseded:
+- **Database: `mnestic` (`mnesticdb.com`)**: We are using `mnestic` (the embedded relational-graph-vector Datalog engine; crate `mnestic` / `cozo`). It replaces BOTH Neo4j and Weaviate. Zero Docker containers required.
+- **Embedded DB Ownership**: To avoid file-lock contention across processes, the **Rust backend owns the mnestic database** (via `AppState`).
+- **Python Research Engine**: The Python agent (managed via `uv`) is a stateless research & extraction worker. It queries sources (Wikipedia, arXiv, free search), normalizes rows with Polars, extracts structured graph primitives via LLM, and returns structured JSON to Rust.
+- **Knowledge Graph First (Restoring PRD §9)**: The living dossier lives inside mnestic relations (entities, claims, evidence, causal links, temporal relations), NOT flat Markdown concatenation.
+- **Briefing Generation (PRD §10)**: Analytical briefings are synthesized *from* Datalog graph queries + HNSW vector similarity search over the evidence.
+
+## 2. Non-Goals & Guardrails
+- **NO forecasting / probabilities**: Strict PRD non-goal. The system models causality, dissent, and cruxes to assist human judgment; it never outputs predictive probabilities.
+- **No external DB infrastructure**: Use embedded mnestic (`mem` storage engine for tests, `sqlite` or `rocksdb` for persistence).
+- **Scope discipline**: Implement ONE end-to-end slice, not the full product.
+
+## 3. Phase-1 Slice Requirements
+Deliver a working, tested pipeline for a single analytical question (e.g., a geopolitical or semiconductor supply-chain crux):
+1. **mnestic Schema**: Datalog definitions for:
+   - PRD domain entities: People, Organizations, Countries, Technologies, Events, Policies, Claims, Evidence, Causal Links, Temporal Relations.
+   - Built-in HNSW index for evidence embeddings and claim similarity.
+   - Datalog traversal rules for causal chains and crux discovery.
+2. **Research & Extraction (Python / `uv`)**:
+   - Multi-source search (free-tier / keyless first: Wikipedia, arXiv).
+   - Structured LLM extraction outputting schema-conforming entities, claims, evidence, and causal relations.
+3. **Ingestion & Synthesis (Rust / Axum)**:
+   - Ingests extracted JSON into mnestic via atomic Datalog transactions.
+   - Queries mnestic (graph paths + vector similarity) to build context.
+   - Generates the 11-section briefing per PRD §10: Executive Overview, Situation Summary, Historical Context, Causal Model, Competing Hypotheses, Consensus/Dissent, Crux Analysis, Counterfactuals, Evidence Assessment, Open Questions, Sources.
+4. **Tests & Harness**:
+   - Integration test proving the round-trip: Input Question → Extraction → mnestic Ingestion → Graph Retrieval → Rendered Briefing.
+
+## 4. Execution Instructions
+- Inspect existing workspace files and dependencies first.
+- Keep the design minimal, modular, and idiomatic.
+- Run tests (`cargo test`, `uv run pytest`) and fix any compiler/linter issues before declaring completion.

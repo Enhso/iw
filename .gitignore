@@ -1,0 +1,18 @@
+# Rust
+/target/
+# Python
+.venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+# Secrets
+.env
+# Local data
+/data/
+test-output/
+# SDD scratch
+.superpowers/
+# Stray hook artifact directory (literal name)
+/$HOME/
