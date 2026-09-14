@@ -74,12 +74,13 @@ def extract(
     Returns:
         A normalized `ExtractionPayload` that has passed `check_integrity`.
         `schema_version`, `question`, and `sources` are always the caller's
-        own values; any the model returned are overwritten.
+        own values; any the model returned are overwritten. Items the
+        model returned that violate the contract are repaired or dropped
+        by `ExtractionPayload.from_untrusted` rather than failing the
+        whole extraction.
 
     Raises:
         LlmError: If the completer's request or JSON parsing fails.
-        pydantic.ValidationError: If the model's output does not match
-            the `ExtractionPayload` shape.
         ValueError: If `check_integrity` finds a duplicate id or dangling
             reference after normalization.
     """
@@ -95,9 +96,8 @@ def extract(
         )
         for doc in documents
     ]
-    payload = ExtractionPayload.model_validate(
+    normalized_payload = ExtractionPayload.from_untrusted(
         {**raw, "schema_version": 1, "question": question, "sources": sources}
     )
-    normalized_payload = payload.normalized()
     normalized_payload.check_integrity()
     return normalized_payload

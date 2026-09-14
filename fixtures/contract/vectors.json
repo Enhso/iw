@@ -1,0 +1,47 @@
+{
+  "ids": {
+    "valid": [
+      "ent:china",
+      "evt:bis-export-controls-2022",
+      "clm:a",
+      "evd:x1",
+      "src:arxiv-9999-00001v1",
+      "ent:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "invalid": [
+      "ent:U.S._Gov",
+      "ent:",
+      "china",
+      "ent:-china",
+      "ent:china-",
+      "ent:chi--na",
+      "xyz:china",
+      "ent:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ]
+  },
+  "dates": {
+    "valid": [
+      "",
+      "2022-10-07"
+    ],
+    "invalid": [
+      "2023",
+      "October 2022",
+      "2022-1-07",
+      "2022/10/07",
+      "2022-10-7"
+    ]
+  },
+  "quality": {
+    "valid": [
+      0.0,
+      0.4,
+      1.0
+    ],
+    "invalid": [
+      -0.1,
+      1.5,
+      7
+    ]
+  }
+}

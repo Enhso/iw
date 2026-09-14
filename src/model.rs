@@ -488,6 +488,87 @@ fn validate_date(field: &'static str, value: &str) -> Result<(), PayloadError> {
 mod tests {
     use super::*;
 
+    /// One `{valid: [...], invalid: [...]}` vector list from
+    /// `fixtures/contract/vectors.json`, shared with the Python worker's
+    /// `python/tests/test_contract.py`.
+    #[derive(Debug, serde::Deserialize)]
+    struct ContractVectorSet<T> {
+        valid: Vec<T>,
+        invalid: Vec<T>,
+    }
+
+    /// The full contents of `fixtures/contract/vectors.json`.
+    #[derive(Debug, serde::Deserialize)]
+    struct ContractVectors {
+        ids: ContractVectorSet<String>,
+        dates: ContractVectorSet<String>,
+        quality: ContractVectorSet<f64>,
+    }
+
+    const CONTRACT_VECTORS_JSON: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/contract/vectors.json"
+    ));
+
+    /// The five list-prefix tags Global Constraint 10 recognizes.
+    const KNOWN_ID_PREFIXES: [&str; 5] = ["ent", "evt", "clm", "evd", "src"];
+
+    /// Checks `id` against [`is_valid_id`]'s shape rule for whichever of
+    /// [`KNOWN_ID_PREFIXES`] it actually carries, without regard to which
+    /// specific list it is meant for; the separate
+    /// `wrong_prefix_for_list_is_rejected` test covers the list-to-prefix
+    /// binding.
+    fn is_valid_id_for_any_known_prefix(id: &str) -> bool {
+        KNOWN_ID_PREFIXES
+            .iter()
+            .any(|prefix| is_valid_id(id, prefix))
+    }
+
+    #[test]
+    fn contract_vectors_classify_ids_dates_and_quality_like_rust_does() {
+        let vectors: ContractVectors =
+            serde_json::from_str(CONTRACT_VECTORS_JSON).expect("contract vectors parse");
+
+        for id in &vectors.ids.valid {
+            assert!(
+                is_valid_id_for_any_known_prefix(id),
+                "expected valid id: {id}"
+            );
+        }
+        for id in &vectors.ids.invalid {
+            assert!(
+                !is_valid_id_for_any_known_prefix(id),
+                "expected invalid id: {id}"
+            );
+        }
+
+        for date in &vectors.dates.valid {
+            assert!(
+                validate_date("field", date).is_ok(),
+                "expected valid date: {date:?}"
+            );
+        }
+        for date in &vectors.dates.invalid {
+            assert!(
+                validate_date("field", date).is_err(),
+                "expected invalid date: {date:?}"
+            );
+        }
+
+        for quality in &vectors.quality.valid {
+            assert!(
+                (0.0..=1.0).contains(quality),
+                "expected valid quality: {quality}"
+            );
+        }
+        for quality in &vectors.quality.invalid {
+            assert!(
+                !(0.0..=1.0).contains(quality),
+                "expected invalid quality: {quality}"
+            );
+        }
+    }
+
     fn sample_payload() -> ExtractionPayload {
         ExtractionPayload {
             schema_version: 1,
