@@ -248,17 +248,12 @@ fn render_situation_summary(ctx: &BriefingContext) -> String {
         .iter()
         .take(8)
         .map(|row| {
-            let quality = ctx
-                .evidence
-                .iter()
-                .find(|e| e.id == row.id)
-                .map_or(0.0, |e| e.quality);
             format!(
                 "({stance}, {word}) {excerpt} [{source}]",
                 stance = row.stance,
-                word = quality_word(quality),
+                word = quality_word(row.quality),
                 excerpt = row.excerpt,
-                source = source_title(ctx, &row.source_id),
+                source = row.source_title,
             )
         })
         .collect();
@@ -738,7 +733,10 @@ fn render_source_appendix(ctx: &BriefingContext) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{dossier_id_for, Claim, Entity, Evidence, ExtractionPayload, Source};
+    use crate::model::{
+        dossier_id_for, CausalLink, Claim, Entity, Event, Evidence, ExtractionPayload, Source,
+        TemporalRelation,
+    };
     use crate::store::GraphStore;
 
     const FIXTURE: &str = include_str!(concat!(
@@ -1125,5 +1123,145 @@ semiconductor manufacturing capability, rather than merely delaying it.";
             crux_heading_count <= 3,
             "Crux Analysis should stay capped at 3 headings, got {crux_heading_count}"
         );
+    }
+
+    /// Ingests a handcrafted dossier B that re-declares one of dossier A's
+    /// events and one of A's claims (identical stored fields), and touches
+    /// those shared ids with B-only edges, including a quality-0.95
+    /// contradicting evidence item whose excerpt is set to A's own question
+    /// text verbatim so it is guaranteed to be the globally nearest
+    /// evidence row for A's Situation Summary query.
+    #[test]
+    fn other_dossier_rows_never_leak_into_briefing() {
+        let store = GraphStore::open_memory().expect("open store");
+        store.init_schema().expect("init schema");
+
+        let payload_a = fixture_payload();
+        let report_a = store.ingest(&payload_a, CREATED_AT).expect("ingest A");
+        let ctx_before = build_context(&store, &report_a.dossier_id)
+            .expect("build_context before B")
+            .expect("dossier A exists");
+        let briefing_before = render(&ctx_before);
+
+        let payload_b = ExtractionPayload {
+            schema_version: 1,
+            question: "Did the October 2022 rule directly cause the B-only claim in this \
+                        handcrafted dossier?"
+                .to_string(),
+            entities: vec![Entity {
+                id: "ent:b-only-actor".to_string(),
+                name: "B Only Actor".to_string(),
+                kind: "organization".to_string(),
+                description: "A dossier-B-only entity for the cross-dossier leak test.".to_string(),
+            }],
+            events: vec![
+                Event {
+                    id: "evt:bis-export-controls-2022".to_string(),
+                    name: "BIS publishes October 2022 export control rule".to_string(),
+                    occurred_at: "2022-10-07".to_string(),
+                    description: "The Bureau of Industry and Security issued a rule imposing \
+                                   license requirements on exports to China of advanced logic \
+                                   chips, high-bandwidth memory, and the equipment used to \
+                                   manufacture them."
+                        .to_string(),
+                    actor_ids: vec!["ent:b-only-actor".to_string()],
+                },
+                Event {
+                    id: "evt:b-only-event".to_string(),
+                    name: "B Only Event".to_string(),
+                    occurred_at: "2024-01-01".to_string(),
+                    description: "A dossier-B-only event for the cross-dossier leak test."
+                        .to_string(),
+                    actor_ids: vec![],
+                },
+            ],
+            sources: vec![Source {
+                id: "src:b-only-source".to_string(),
+                title: "B Only Source".to_string(),
+                url: "https://example.com/b-only-source".to_string(),
+                provider: "wikipedia".to_string(),
+                published: String::new(),
+                retrieved_at: CREATED_AT.to_string(),
+            }],
+            claims: vec![Claim {
+                id: "clm:controls-durably-slow-china".to_string(),
+                text: "Export controls durably slow China's access to advanced semiconductor \
+                       manufacturing capability, rather than merely delaying it."
+                    .to_string(),
+                kind: "hypothesis".to_string(),
+                subject_ids: vec!["ent:b-only-actor".to_string()],
+            }],
+            evidence: vec![Evidence {
+                id: "evd:b-only-evidence".to_string(),
+                claim_id: "clm:controls-durably-slow-china".to_string(),
+                source_id: "src:b-only-source".to_string(),
+                stance: "contradicts".to_string(),
+                excerpt: payload_a.question.clone(),
+                quality: 0.95,
+            }],
+            causal_links: vec![CausalLink {
+                cause_id: "evt:bis-export-controls-2022".to_string(),
+                effect_id: "clm:controls-durably-slow-china".to_string(),
+                mechanism: "Dossier B's own causal link from the shared event to the shared \
+                            claim."
+                    .to_string(),
+                confidence: "low".to_string(),
+            }],
+            temporal_relations: vec![TemporalRelation {
+                before_id: "evt:bis-export-controls-2022".to_string(),
+                after_id: "evt:b-only-event".to_string(),
+                relation: "before".to_string(),
+            }],
+        };
+        payload_b.validate().expect("payload B is valid");
+        store.ingest(&payload_b, CREATED_AT).expect("ingest B");
+
+        let ctx_after = build_context(&store, &report_a.dossier_id)
+            .expect("build_context after B")
+            .expect("dossier A still exists");
+        let briefing_after = render(&ctx_after);
+
+        for (before, after) in briefing_before
+            .sections
+            .iter()
+            .zip(briefing_after.sections.iter())
+        {
+            assert_eq!(before.title, after.title);
+            if before.title == "Situation Summary" {
+                continue;
+            }
+            assert_eq!(
+                before.body, after.body,
+                "section {} changed after ingesting an unrelated dossier B",
+                before.title
+            );
+        }
+
+        let source_appendix_start = briefing_after
+            .markdown
+            .find("## Source Appendix")
+            .expect("Source Appendix heading present");
+        let before_appendix = &briefing_after.markdown[..source_appendix_start];
+        for needle in ["ent:", "evt:", "clm:", "evd:", "src:"] {
+            assert!(
+                !before_appendix.contains(needle),
+                "markdown before Source Appendix contains raw id substring {needle:?}"
+            );
+        }
+
+        let situation_summary = &briefing_after.sections[1];
+        assert_eq!(situation_summary.title, "Situation Summary");
+        if situation_summary.body.contains(&payload_a.question) {
+            assert!(
+                situation_summary.body.contains("(contradicts, high)"),
+                "B's evidence should render with quality word 'high': {}",
+                situation_summary.body
+            );
+            assert!(
+                situation_summary.body.contains("[B Only Source]"),
+                "B's evidence should render with B's own source title: {}",
+                situation_summary.body
+            );
+        }
     }
 }

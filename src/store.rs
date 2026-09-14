@@ -139,8 +139,10 @@ pub struct SimilarEvidenceRow {
     pub id: String,
     pub claim_id: String,
     pub source_id: String,
+    pub source_title: String,
     pub stance: String,
     pub excerpt: String,
+    pub quality: f64,
     pub distance: f64,
 }
 
@@ -522,9 +524,11 @@ impl GraphStore {
                     id: str_at(row, 0, "similar_evidence")?,
                     claim_id: str_at(row, 1, "similar_evidence")?,
                     source_id: str_at(row, 2, "similar_evidence")?,
-                    stance: str_at(row, 3, "similar_evidence")?,
-                    excerpt: str_at(row, 4, "similar_evidence")?,
-                    distance: float_at(row, 5, "similar_evidence")?,
+                    source_title: str_at(row, 3, "similar_evidence")?,
+                    stance: str_at(row, 4, "similar_evidence")?,
+                    excerpt: str_at(row, 5, "similar_evidence")?,
+                    quality: float_at(row, 6, "similar_evidence")?,
+                    distance: float_at(row, 7, "similar_evidence")?,
                 })
             })
             .collect()
@@ -693,6 +697,7 @@ fn ingest_params(
                 .flat_map(|event| {
                     event.actor_ids.iter().map(move |actor_id| {
                         DataValue::List(vec![
+                            DataValue::from(dossier_id),
                             DataValue::from(event.id.as_str()),
                             DataValue::from(actor_id.as_str()),
                         ])
@@ -749,6 +754,7 @@ fn ingest_params(
                 .flat_map(|claim| {
                     claim.subject_ids.iter().map(move |subject_id| {
                         DataValue::List(vec![
+                            DataValue::from(dossier_id),
                             DataValue::from(claim.id.as_str()),
                             DataValue::from(subject_id.as_str()),
                         ])
@@ -787,6 +793,7 @@ fn ingest_params(
                 .iter()
                 .map(|link| {
                     DataValue::List(vec![
+                        DataValue::from(dossier_id),
                         DataValue::from(link.cause_id.as_str()),
                         DataValue::from(link.effect_id.as_str()),
                         DataValue::from(link.mechanism.as_str()),
@@ -805,6 +812,7 @@ fn ingest_params(
                 .iter()
                 .map(|relation| {
                     DataValue::List(vec![
+                        DataValue::from(dossier_id),
                         DataValue::from(relation.before_id.as_str()),
                         DataValue::from(relation.after_id.as_str()),
                         DataValue::from(relation.relation.as_str()),
@@ -1271,5 +1279,285 @@ mod tests {
         assert!(similar
             .iter()
             .any(|row| payload_a.claims.iter().any(|claim| claim.id == row.id)));
+    }
+
+    /// Builds a handcrafted dossier B that re-declares one of dossier A's
+    /// events (`evt:bis-export-controls-2022`) and one of A's claims
+    /// (`clm:controls-durably-slow-china`) with identical stored fields,
+    /// then adds B-only nodes and edges that touch those shared ids: an
+    /// event actor and a claim subject pointing at a B-only entity, a
+    /// causal link from the shared event to the shared claim, a temporal
+    /// relation from the shared event to a B-only event, and a
+    /// contradicting, quality-0.95 evidence item citing a B-only source.
+    fn dossier_b_sharing_ids_with_fixture_a() -> ExtractionPayload {
+        ExtractionPayload {
+            schema_version: 1,
+            question: "Did the October 2022 rule directly cause the B-only claim in this \
+                        handcrafted dossier?"
+                .to_string(),
+            entities: vec![crate::model::Entity {
+                id: "ent:b-only-actor".to_string(),
+                name: "B Only Actor".to_string(),
+                kind: "organization".to_string(),
+                description: "A dossier-B-only entity for the cross-dossier leak test.".to_string(),
+            }],
+            events: vec![
+                crate::model::Event {
+                    id: "evt:bis-export-controls-2022".to_string(),
+                    name: "BIS publishes October 2022 export control rule".to_string(),
+                    occurred_at: "2022-10-07".to_string(),
+                    description: "The Bureau of Industry and Security issued a rule imposing \
+                                   license requirements on exports to China of advanced logic \
+                                   chips, high-bandwidth memory, and the equipment used to \
+                                   manufacture them."
+                        .to_string(),
+                    actor_ids: vec!["ent:b-only-actor".to_string()],
+                },
+                crate::model::Event {
+                    id: "evt:b-only-event".to_string(),
+                    name: "B Only Event".to_string(),
+                    occurred_at: "2024-01-01".to_string(),
+                    description: "A dossier-B-only event for the cross-dossier leak test."
+                        .to_string(),
+                    actor_ids: vec![],
+                },
+            ],
+            sources: vec![crate::model::Source {
+                id: "src:b-only-source".to_string(),
+                title: "B Only Source".to_string(),
+                url: "https://example.com/b-only-source".to_string(),
+                provider: "wikipedia".to_string(),
+                published: String::new(),
+                retrieved_at: CREATED_AT.to_string(),
+            }],
+            claims: vec![crate::model::Claim {
+                id: "clm:controls-durably-slow-china".to_string(),
+                text: "Export controls durably slow China's access to advanced semiconductor \
+                       manufacturing capability, rather than merely delaying it."
+                    .to_string(),
+                kind: "hypothesis".to_string(),
+                subject_ids: vec!["ent:b-only-actor".to_string()],
+            }],
+            evidence: vec![crate::model::Evidence {
+                id: "evd:b-only-evidence".to_string(),
+                claim_id: "clm:controls-durably-slow-china".to_string(),
+                source_id: "src:b-only-source".to_string(),
+                stance: "contradicts".to_string(),
+                excerpt: "Dossier B's own evidence contradicting the shared claim.".to_string(),
+                quality: 0.95,
+            }],
+            causal_links: vec![crate::model::CausalLink {
+                cause_id: "evt:bis-export-controls-2022".to_string(),
+                effect_id: "clm:controls-durably-slow-china".to_string(),
+                mechanism: "Dossier B's own causal link from the shared event to the shared \
+                            claim."
+                    .to_string(),
+                confidence: "low".to_string(),
+            }],
+            temporal_relations: vec![crate::model::TemporalRelation {
+                before_id: "evt:bis-export-controls-2022".to_string(),
+                after_id: "evt:b-only-event".to_string(),
+                relation: "before".to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn shared_ids_do_not_leak_across_dossiers() {
+        let store = GraphStore::open_memory().expect("open store");
+        store.init_schema().expect("init schema");
+
+        let payload_a = fixture_payload();
+        let report_a = store.ingest(&payload_a, CREATED_AT).expect("ingest A");
+
+        let event_actors_before = store
+            .event_actors(&report_a.dossier_id)
+            .expect("event_actors before B");
+        let claim_subjects_before = store
+            .claim_subjects(&report_a.dossier_id)
+            .expect("claim_subjects before B");
+        let claims_with_stance_before = store
+            .claims_with_stance(&report_a.dossier_id)
+            .expect("claims_with_stance before B");
+        let causal_links_before = store
+            .causal_links(&report_a.dossier_id)
+            .expect("causal_links before B");
+        let causal_chains_before = store
+            .causal_chains(&report_a.dossier_id)
+            .expect("causal_chains before B");
+        let cruxes_before = store.cruxes(&report_a.dossier_id).expect("cruxes before B");
+        let consensus_before = store
+            .consensus(&report_a.dossier_id)
+            .expect("consensus before B");
+        let temporal_before = store
+            .temporal_relations(&report_a.dossier_id)
+            .expect("temporal_relations before B");
+
+        let payload_b = dossier_b_sharing_ids_with_fixture_a();
+        payload_b.validate().expect("payload B is valid");
+        store.ingest(&payload_b, CREATED_AT).expect("ingest B");
+
+        assert_eq!(
+            store
+                .event_actors(&report_a.dossier_id)
+                .expect("event_actors after B"),
+            event_actors_before
+        );
+        assert_eq!(
+            store
+                .claim_subjects(&report_a.dossier_id)
+                .expect("claim_subjects after B"),
+            claim_subjects_before
+        );
+        assert_eq!(
+            store
+                .claims_with_stance(&report_a.dossier_id)
+                .expect("claims_with_stance after B"),
+            claims_with_stance_before
+        );
+        assert_eq!(
+            store
+                .causal_links(&report_a.dossier_id)
+                .expect("causal_links after B"),
+            causal_links_before
+        );
+        assert_eq!(
+            store
+                .causal_chains(&report_a.dossier_id)
+                .expect("causal_chains after B"),
+            causal_chains_before
+        );
+        assert_eq!(
+            store.cruxes(&report_a.dossier_id).expect("cruxes after B"),
+            cruxes_before
+        );
+        assert_eq!(
+            store
+                .consensus(&report_a.dossier_id)
+                .expect("consensus after B"),
+            consensus_before
+        );
+        assert_eq!(
+            store
+                .temporal_relations(&report_a.dossier_id)
+                .expect("temporal_relations after B"),
+            temporal_before
+        );
+    }
+
+    /// A handcrafted three-node causal cycle (`clm:cycle-1 -> clm:cycle-2 ->
+    /// clm:cycle-3 -> clm:cycle-1`), each claim contested (both supporting
+    /// and contradicting evidence). Proves `CAUSAL_CHAINS`'s `!is_in(c, p)`
+    /// guard stops a chain from revisiting a node, and `CRUXES`'s `a != c`
+    /// guard in `reach` stops a crux from counting itself among its own
+    /// downstream effects: each of the 3 nodes should reach exactly the
+    /// other 2, never itself.
+    #[test]
+    fn causal_chains_do_not_revisit_nodes() {
+        let source = crate::model::Source {
+            id: "src:cycle-source".to_string(),
+            title: "Cycle Source".to_string(),
+            url: "https://example.com/cycle-source".to_string(),
+            provider: "wikipedia".to_string(),
+            published: String::new(),
+            retrieved_at: CREATED_AT.to_string(),
+        };
+
+        let mut claims = Vec::new();
+        let mut evidence = Vec::new();
+        for n in 1..=3 {
+            let claim_id = format!("clm:cycle-{n}");
+            claims.push(crate::model::Claim {
+                id: claim_id.clone(),
+                text: format!("Contested claim {n} in a three-node causal cycle."),
+                kind: "hypothesis".to_string(),
+                subject_ids: vec![],
+            });
+            evidence.push(crate::model::Evidence {
+                id: format!("evd:cycle-{n}-supports"),
+                claim_id: claim_id.clone(),
+                source_id: source.id.clone(),
+                stance: "supports".to_string(),
+                excerpt: format!("Supporting excerpt for cycle claim {n}."),
+                quality: 0.5,
+            });
+            evidence.push(crate::model::Evidence {
+                id: format!("evd:cycle-{n}-contradicts"),
+                claim_id,
+                source_id: source.id.clone(),
+                stance: "contradicts".to_string(),
+                excerpt: format!("Contradicting excerpt for cycle claim {n}."),
+                quality: 0.5,
+            });
+        }
+
+        let causal_links = vec![
+            crate::model::CausalLink {
+                cause_id: "clm:cycle-1".to_string(),
+                effect_id: "clm:cycle-2".to_string(),
+                mechanism: "Cycle edge 1 -> 2.".to_string(),
+                confidence: "low".to_string(),
+            },
+            crate::model::CausalLink {
+                cause_id: "clm:cycle-2".to_string(),
+                effect_id: "clm:cycle-3".to_string(),
+                mechanism: "Cycle edge 2 -> 3.".to_string(),
+                confidence: "low".to_string(),
+            },
+            crate::model::CausalLink {
+                cause_id: "clm:cycle-3".to_string(),
+                effect_id: "clm:cycle-1".to_string(),
+                mechanism: "Cycle edge 3 -> 1.".to_string(),
+                confidence: "low".to_string(),
+            },
+        ];
+
+        let payload = ExtractionPayload {
+            schema_version: 1,
+            question: "Does a three-node causal cycle stay well-formed under the chain and \
+                        crux queries?"
+                .to_string(),
+            entities: vec![],
+            events: vec![],
+            sources: vec![source],
+            claims,
+            evidence,
+            causal_links,
+            temporal_relations: vec![],
+        };
+        payload.validate().expect("cycle payload is valid");
+
+        let store = GraphStore::open_memory().expect("open store");
+        store.init_schema().expect("init schema");
+        let report = store
+            .ingest(&payload, CREATED_AT)
+            .expect("ingest cycle payload");
+
+        let chains = store
+            .causal_chains(&report.dossier_id)
+            .expect("causal_chains");
+        assert!(!chains.is_empty());
+        for chain in &chains {
+            let mut seen = std::collections::HashSet::new();
+            assert!(
+                chain.path.iter().all(|id| seen.insert(id.clone())),
+                "chain path revisits a node: {:?}",
+                chain.path
+            );
+        }
+
+        let cruxes = store.cruxes(&report.dossier_id).expect("cruxes");
+        assert_eq!(
+            cruxes.len(),
+            3,
+            "all three cycle claims should be contested"
+        );
+        for crux in &cruxes {
+            assert_eq!(
+                crux.downstream, 2,
+                "crux {} should reach exactly the other two cycle nodes, not itself: {crux:?}",
+                crux.id
+            );
+        }
     }
 }
