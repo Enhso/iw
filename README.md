@@ -3,13 +3,20 @@
 Phase 1: a single, end-to-end analytical slice. Given a research question,
 the system fetches source documents, extracts a structured research graph
 from them, stores that graph, and renders an 11-section analytical
-briefing from it. See PRD Section 9 (system overview) and Section 10 (the
-briefing format) for the full specification.
+briefing from it. See PRD Section 9 (Knowledge Representation) and
+Section 10 (the briefing format) for the full specification.
 
-This system never forecasts. It never emits a probability, a percentage,
-or the words "probability" or "likelihood". It surfaces evidence, causal
-structure, consensus, dissent, and open questions, and leaves judgment to
-the reader.
+This system never forecasts. Renderer-authored text never contains a
+probability, a percentage, or the words "probability" or "likelihood":
+the deterministic Rust briefing renderer cannot emit forecasting
+language by construction. The Python worker additionally drops any
+LLM-authored claim or causal-link mechanism that uses forecasting
+language, since nothing else stops an LLM from writing "70% chance"
+straight into its output. Source excerpts are exempt from that check and
+are quoted verbatim, since a source may legitimately use a percentage
+(e.g. market share). The system surfaces evidence, causal structure,
+consensus, dissent, and open questions, and leaves judgment to the
+reader.
 
 ## Architecture
 
@@ -79,7 +86,7 @@ cargo run
 ```
 curl -s -X POST http://127.0.0.1:8080/api/questions \
   -H "content-type: application/json" \
-  -d '{"question": "Will the EU AI Act reshape open-weight model releases?"}'
+  -d '{"question": "What mechanisms link the EU AI Act to changes in open-weight model releases?"}'
 ```
 
 ## API
@@ -111,6 +118,12 @@ All variables are optional; each has a default.
 | `LLM_API_BASE`             | `https://api.openai.com/v1` | Read only by the Python worker, in live mode. |
 | `LLM_API_KEY`              | required in live mode | Read only by the Python worker, never by Rust.       |
 | `LLM_MODEL`                | required in live mode | Read only by the Python worker, never by Rust.       |
+
+**Upgrading.** A sqlite database (`IW_DB_ENGINE=sqlite`) created before
+the edge relations gained a `dossier_id` column must be deleted; mnestic
+does not migrate an existing schema in place. Delete the file at
+`IW_DB_PATH` (default `data/iw.sqlite`) and let the server recreate it on
+next startup.
 
 ## How briefings are generated
 
@@ -184,20 +197,30 @@ network access is required.
   access or a live LLM, at the cost of that path only ever being
   exercised against one fixed question in CI.
 - **One dossier per question, deterministically.** A dossier's id is
-  derived from its question text (`dos:` + a slugified, truncated hash of
-  the question), so re-asking the same question re-ingests into the same
-  dossier rather than creating a duplicate.
-- **Vector search is global, not per-dossier.** The two HNSW indexes span
-  every ingested dossier, so "claims closest to the question" can surface
-  material from other dossiers. This is intentional for Phase 1's
-  single-user, single-corpus scope.
+  `dos:<slug>-<8 hex digit hash of the question>`: a slugified, truncated
+  (60 characters) form of the question, followed by 8 hex digits of an
+  FNV-1a hash of the full trimmed question. The hash disambiguates
+  questions that agree on their first 60 slugified characters, or that
+  have no ASCII alphanumeric characters at all. Re-asking the same
+  question re-ingests into the same dossier rather than creating a
+  duplicate.
+- **Nodes are shared, edges and membership are per dossier, vector search
+  is global.** Entities, events, sources, claims, and evidence are global
+  records keyed by id and can be shared across dossiers (an LLM
+  routinely re-derives the same slug for the same real-world entity).
+  Edges (`event_actor`, `claim_subject`, `causal_link`,
+  `temporal_relation`) and dossier membership (`dossier_item`) are scoped
+  by `dossier_id`, since an edge or a membership claim is an assertion
+  made inside one dossier. The two HNSW vector indexes span every
+  ingested dossier, so "claims closest to the question" and "evidence
+  closest to the question" can surface material from other dossiers;
+  this is intentional for Phase 1's single-user, single-corpus scope.
 
 ## What Phase 2 would add
 
 - A frontend and a persistent chat/session layer over the API.
 - Additional source providers beyond Wikipedia and arXiv.
 - Personalization (saved dossiers, per-user history).
-- A GitHub integration or PR-review flow.
 - Multiple concurrent LLM providers with routing/fallback.
 
 None of these are in scope for Phase 1; see Global Constraint 13 in

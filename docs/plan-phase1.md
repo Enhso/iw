@@ -8,7 +8,7 @@ Repository root: `/home/hatim/projects/iw`. Rust crate at the root (`iw-server`)
 
 These bind every task. Reviewers receive this section verbatim.
 
-1. **No forecasting.** The system never emits a probability, percentage, likelihood, or prediction. The rendered briefing must not match the regex `\d+\s*%` and must not contain the words `probability` or `likelihood` (case-insensitive). Evidence quality is a `0.0..=1.0` float in storage but is rendered only as the words `high` (>= 0.7), `medium` (>= 0.4), or `low`.
+1. **No forecasting.** The system never emits a probability, percentage, likelihood, or prediction. This applies to renderer-authored text: the rendered briefing's renderer-authored text must not match the regex `\d+\s*%` and must not contain the words `probability` or `likelihood` (case-insensitive). Evidence quality is a `0.0..=1.0` float in storage but is rendered only as the words `high` (>= 0.7), `medium` (>= 0.4), or `low`. Verbatim source excerpts are exempt, since a source may legitimately use a percentage; instead, the Python worker drops any LLM-authored claim or causal link whose `text`/`mechanism` uses probability phrasing (case-insensitive match on `\b(probability|probabilities|likelihood|odds)\b|\d+(\.\d+)?\s*%\s*(chance|probability|likelihood|likely)`).
 2. **Database is mnestic, owned by Rust.** Cargo dependency is `mnestic = "0.18"`; its library crate is named `cozo`, so Rust code imports `use cozo::{DataValue, DbInstance, NamedRows, ScriptMutability};`. Engines: `mem` (tests, default) and `sqlite` (persistence). No Docker, no external DB. Python never opens the database.
 3. **Python is a stateless worker.** `uv`-managed project in `python/`, invoked as `uv run --directory python iw-research --question "<q>" [--fixture-dir <dir>]`. It prints exactly one JSON document (the ExtractionPayload) to stdout and logs only to stderr.
 4. **Shared contract = ExtractionPayload** (below). Rust `src/model.rs` and Python `iw_research/schema.py` both implement it; `fixtures/payload/semiconductor.json` is the canonical instance both test suites consume.
@@ -17,8 +17,8 @@ These bind every task. Reviewers receive this section verbatim.
 7. **No network in tests.** Rust: no HTTP calls at all (the Python worker is spawned only in `--fixture-dir` mode). Python: `httpx` mocked with `pytest-httpx`; the LLM is mocked or fixture-backed.
 8. **Rust rules** (from `CLAUDE.md`): edition 2021; `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` must all pass with zero warnings; no `.unwrap()` outside `#[cfg(test)]`/`tests/` (use `?`, `expect("invariant …")`, or explicit errors); `thiserror` for error enums; doc comments (`///`) on every public item documenting params/returns/errors; errors reported with `tracing::error!`/`warn!`, never `println!`; 4-space indent; 100-column lines; no emoji or emoji-like unicode; no commented-out code; no `dbg!`.
 9. **Python rules**: Python `>= 3.12`, `uv` only; `polars` for all tabular work (never pandas); `orjson` for JSON; `httpx` for HTTP; pydantic v2 models; type hints on every function; `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src` (strict), and `uv run pytest -q` must pass; `logger.error`/`logger.warning` for errors, never `print`; no bare `except:`; no mutable default arguments; 88-column lines; tests are their own files under `python/tests/` and are never deleted.
-10. **Identifiers** are prefixed lowercase slugs matching `^(ent|evt|clm|evd|src|dos):[a-z0-9]+(-[a-z0-9]+)*$`, at most 80 characters total. Slug rule: lowercase, non-alphanumerics collapse to a single `-`, leading/trailing `-` stripped. Dossier id = `dos:` + slug(question) truncated to 60 characters of slug (no trailing `-`).
-11. **Referential integrity**: every `subject_ids`, `actor_ids`, `claim_id`, `source_id`, `cause_id`, `effect_id`, `before_id`, `after_id` value must reference an id declared in the same payload; ids must be unique across all lists. Rust rejects violations with HTTP 422; Python drops dangling references with `logger.warning` and de-duplicates by id (keep first).
+10. **Identifiers** are prefixed lowercase slugs matching `^(ent|evt|clm|evd|src|dos):[a-z0-9]+(-[a-z0-9]+)*$`, at most 80 characters total. Slug rule: lowercase, non-alphanumerics collapse to a single `-`, leading/trailing `-` stripped. Dossier id = `dos:<slug>-<hash>`: `slug` is `slugify(question.trim())` truncated to 60 characters (no trailing `-`; the literal `q` if that slug is empty), and `hash` is the low 32 bits of the 64-bit FNV-1a hash of the trimmed question, formatted as 8 lowercase hex digits. At most 73 characters total. The hash disambiguates questions that would otherwise collide, either by agreeing on their first 60 slugified characters or by slugifying to `""` (e.g. non-Latin scripts).
+11. **Referential integrity**: every `subject_ids`, `actor_ids`, `claim_id`, `source_id`, `cause_id`, `effect_id`, `before_id`, `after_id` value must reference an id declared in the same payload; ids must be unique across all lists. Rust rejects violations with HTTP 422; Python enforces the full Rust contract item by item rather than only dropping dangling references — repairing or dropping malformed ids, dates, quality, and enums, and dropping forecasting language, each logged via `logger.warning` — then drops dangling references and de-duplicates by id (keep first, logged). A shared vector file (`fixtures/contract/vectors.json`) of valid/invalid ids, dates, and quality scores is consumed by both the Rust and Python test suites.
 12. **Commits**: one or more commits per task, conventional subject line, body ending with the two trailer lines:
     ```
     Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
@@ -67,13 +67,13 @@ Run as ONE script (all blocks chained) only when `::relations` does not already 
 { :create dossier_item {dossier_id: String, item_id: String} }
 { :create entity {id: String => name: String, kind: String, description: String} }
 { :create event {id: String => name: String, occurred_at: String, description: String} }
-{ :create event_actor {event_id: String, entity_id: String} }
+{ :create event_actor {dossier_id: String, event_id: String, entity_id: String} }
 { :create source {id: String => title: String, url: String, provider: String, published: String, retrieved_at: String} }
 { :create claim {id: String => text: String, kind: String, embedding: <F32; 256>} }
-{ :create claim_subject {claim_id: String, subject_id: String} }
+{ :create claim_subject {dossier_id: String, claim_id: String, subject_id: String} }
 { :create evidence {id: String => claim_id: String, source_id: String, stance: String, excerpt: String, quality: Float, embedding: <F32; 256>} }
-{ :create causal_link {cause_id: String, effect_id: String => mechanism: String, confidence: String} }
-{ :create temporal_relation {before_id: String, after_id: String => relation: String} }
+{ :create causal_link {dossier_id: String, cause_id: String, effect_id: String => mechanism: String, confidence: String} }
+{ :create temporal_relation {dossier_id: String, before_id: String, after_id: String => relation: String} }
 { ::hnsw create claim:claim_vec {dim: 256, m: 16, dtype: F32, fields: [embedding], distance: Cosine, ef_construction: 64} }
 { ::hnsw create evidence:evidence_vec {dim: 256, m: 16, dtype: F32, fields: [embedding], distance: Cosine, ef_construction: 64} }
 ```
@@ -89,85 +89,85 @@ Ingestion pattern (one script, chained blocks; each `$param` is a `DataValue::Li
   :put entity {id => name, kind, description} }
 { ?[id, name, occurred_at, description] <- $events
   :put event {id => name, occurred_at, description} }
-{ ?[event_id, entity_id] <- $event_actors
-  :put event_actor {event_id, entity_id} }
+{ ?[dossier_id, event_id, entity_id] <- $event_actors
+  :put event_actor {dossier_id, event_id, entity_id} }
 { ?[id, title, url, provider, published, retrieved_at] <- $sources
   :put source {id => title, url, provider, published, retrieved_at} }
 { ?[id, text, kind, embedding] <- $claims
   :put claim {id => text, kind, embedding} }
-{ ?[claim_id, subject_id] <- $claim_subjects
-  :put claim_subject {claim_id, subject_id} }
+{ ?[dossier_id, claim_id, subject_id] <- $claim_subjects
+  :put claim_subject {dossier_id, claim_id, subject_id} }
 { ?[id, claim_id, source_id, stance, excerpt, quality, embedding] <- $evidence
   :put evidence {id => claim_id, source_id, stance, excerpt, quality, embedding} }
-{ ?[cause_id, effect_id, mechanism, confidence] <- $causal_links
-  :put causal_link {cause_id, effect_id => mechanism, confidence} }
-{ ?[before_id, after_id, relation] <- $temporal_relations
-  :put temporal_relation {before_id, after_id => relation} }
+{ ?[dossier_id, cause_id, effect_id, mechanism, confidence] <- $causal_links
+  :put causal_link {dossier_id, cause_id, effect_id => mechanism, confidence} }
+{ ?[dossier_id, before_id, after_id, relation] <- $temporal_relations
+  :put temporal_relation {dossier_id, before_id, after_id => relation} }
 ```
 
-`dossier_item` rows link the dossier id to EVERY id in the payload (entities, events, sources, claims, evidence). Membership is how graph queries are scoped; vector queries are global on purpose (knowledge compounds across dossiers).
+`dossier_item` rows link the dossier id to EVERY id in the payload (entities, events, sources, claims, evidence). Membership is how graph queries are scoped; vector queries are global on purpose (knowledge compounds across dossiers). Nodes (`entity`, `event`, `source`, `claim`, `evidence`) are global, shared records keyed by id; edges (`event_actor`, `claim_subject`, `causal_link`, `temporal_relation`) carry a `dossier_id` column instead, because an edge is an assertion made inside one dossier and ids are routinely shared across related dossiers.
 
 Verified syntax facts: a second `::hnsw create` on the same index fails with `index_already_exists` (hence the `::relations` guard); vector search is `~claim:claim_vec{id, text | query: q, k: 5, ef: 64, bind_distance: dist}, q = vec($q)`; recursion with `length(p) < 6` and `append(p, c)` works; `not rule[x, _]` negation works in rule bodies; `count(e)` / `count_unique(s)` aggregates work in rule heads; `:order`, `:limit` are query options.
 
 ## Datalog queries (verbatim; `$dossier_id` and `$q` are parameters)
 
-Every scoped query starts with:
+Every scoped query over a shared node relation (`entity`, `event`, `source`, `claim`, `evidence`) starts with:
 ```
 member[id] := *dossier_item{dossier_id: $dossier_id, item_id: id}
 ```
+Edges (`event_actor`, `claim_subject`, `causal_link`, `temporal_relation`) carry their own `dossier_id` column instead and are filtered directly on it, since nodes are shared across dossiers but an edge is an assertion made inside one.
 
 - `ENTITIES`: `?[id, name, kind, description] := member[id], *entity{id, name, kind, description}` + `:order kind, name`
 - `EVENTS`: `?[id, name, occurred_at, description] := member[id], *event{id, name, occurred_at, description}` + `:order occurred_at, name`
-- `EVENT_ACTORS`: `?[event_id, entity_id] := member[event_id], *event_actor{event_id, entity_id}`
+- `EVENT_ACTORS`: `?[event_id, entity_id] := *event_actor{dossier_id: $dossier_id, event_id, entity_id}`
 - `SOURCES`: `?[id, title, url, provider, published, retrieved_at] := member[id], *source{id, title, url, provider, published, retrieved_at}` + `:order provider, title`
-- `CLAIM_SUBJECTS`: `?[claim_id, subject_id] := member[claim_id], *claim_subject{claim_id, subject_id}`
+- `CLAIM_SUBJECTS`: `?[claim_id, subject_id] := *claim_subject{dossier_id: $dossier_id, claim_id, subject_id}`
 - `EVIDENCE`: `?[id, claim_id, source_id, stance, excerpt, quality] := member[id], *evidence{id, claim_id, source_id, stance, excerpt, quality}` + `:order claim_id, id`
-- `CLAIMS_WITH_STANCE` (support/contradict counts, zero-filled):
+- `CLAIMS_WITH_STANCE` (support/contradict counts, zero-filled; `sup`/`con` also require the evidence item `e` to be a dossier member):
   ```
   member[id] := *dossier_item{dossier_id: $dossier_id, item_id: id}
-  sup[c, count(e)] := member[c], *evidence{id: e, claim_id: c, stance: 'supports'}
-  con[c, count(e)] := member[c], *evidence{id: e, claim_id: c, stance: 'contradicts'}
+  sup[c, count(e)] := member[c], *evidence{id: e, claim_id: c, stance: 'supports'}, member[e]
+  con[c, count(e)] := member[c], *evidence{id: e, claim_id: c, stance: 'contradicts'}, member[e]
   ?[id, text, kind, ns, nc] := member[id], *claim{id, text, kind}, sup[id, ns], con[id, nc]
   ?[id, text, kind, ns, nc] := member[id], *claim{id, text, kind}, sup[id, ns], not con[id, _], nc = 0
   ?[id, text, kind, ns, nc] := member[id], *claim{id, text, kind}, not sup[id, _], con[id, nc], ns = 0
   ?[id, text, kind, ns, nc] := member[id], *claim{id, text, kind}, not sup[id, _], not con[id, _], ns = 0, nc = 0
   :order id
   ```
-- `CAUSAL_LINKS`: `?[cause_id, effect_id, mechanism, confidence] := member[cause_id], *causal_link{cause_id, effect_id, mechanism, confidence}` + `:order cause_id, effect_id`
-- `CAUSAL_CHAINS` (traversal rule, capped at 6 nodes):
+- `CAUSAL_LINKS`: `?[cause_id, effect_id, mechanism, confidence] := *causal_link{dossier_id: $dossier_id, cause_id, effect_id, mechanism, confidence}` + `:order cause_id, effect_id`
+- `CAUSAL_CHAINS` (traversal rule, capped at 6 nodes, guarded against revisiting a node already on the path):
   ```
-  member[id] := *dossier_item{dossier_id: $dossier_id, item_id: id}
-  link[a, b] := member[a], *causal_link{cause_id: a, effect_id: b}
-  chain[a, b, path] := link[a, b], path = [a, b]
-  chain[a, c, path] := chain[a, b, p], length(p) < 6, link[b, c], path = append(p, c)
+  link[a, b] := *causal_link{dossier_id: $dossier_id, cause_id: a, effect_id: b}
+  chain[a, b, path] := link[a, b], a != b, path = [a, b]
+  chain[a, c, path] := chain[a, b, p], length(p) < 6, link[b, c], !is_in(c, p), path = append(p, c)
   ?[a, c, path, n] := chain[a, c, path], n = length(path)
   :order -n, a, c
   ```
-- `CRUXES` (crux discovery rule: contested claims ranked by contestation plus downstream causal reach):
+- `CRUXES` (crux discovery rule: contested claims ranked by contestation plus downstream causal reach; `a != c` in `reach` means a claim is never its own downstream effect):
   ```
   member[id] := *dossier_item{dossier_id: $dossier_id, item_id: id}
-  link[a, b] := member[a], *causal_link{cause_id: a, effect_id: b}
-  reach[a, b] := link[a, b]
-  reach[a, c] := reach[a, b], link[b, c]
+  link[a, b] := *causal_link{dossier_id: $dossier_id, cause_id: a, effect_id: b}
+  reach[a, b] := link[a, b], a != b
+  reach[a, c] := reach[a, b], link[b, c], a != c
   down[a, count(b)] := reach[a, b]
-  sup[c, count(e)] := member[c], *evidence{id: e, claim_id: c, stance: 'supports'}
-  con[c, count(e)] := member[c], *evidence{id: e, claim_id: c, stance: 'contradicts'}
+  sup[c, count(e)] := member[c], *evidence{id: e, claim_id: c, stance: 'supports'}, member[e]
+  con[c, count(e)] := member[c], *evidence{id: e, claim_id: c, stance: 'contradicts'}, member[e]
   scored[c, ns, nc, nd, s] := member[c], *claim{id: c}, sup[c, ns], con[c, nc], down[c, nd], s = ns + nc + 2 * nd
   scored[c, ns, nc, nd, s] := member[c], *claim{id: c}, sup[c, ns], con[c, nc], not down[c, _], nd = 0, s = ns + nc
   ?[id, text, ns, nc, nd, score] := scored[id, ns, nc, nd, score], *claim{id, text}
   :order -score, id
   :limit 3
   ```
-- `CONSENSUS` (>= 2 distinct supporting sources, zero contradictions):
+- `CONSENSUS` (>= 2 distinct supporting sources, zero contradictions; `sup_src`/`con` also require the evidence item `e` to be a dossier member):
   ```
   member[id] := *dossier_item{dossier_id: $dossier_id, item_id: id}
-  sup_src[c, count_unique(s)] := member[c], *evidence{claim_id: c, source_id: s, stance: 'supports'}
-  con[c, count(e)] := member[c], *evidence{id: e, claim_id: c, stance: 'contradicts'}
+  sup_src[c, count_unique(s)] := member[c], *evidence{id: e, claim_id: c, source_id: s, stance: 'supports'}, member[e]
+  con[c, count(e)] := member[c], *evidence{id: e, claim_id: c, stance: 'contradicts'}, member[e]
   ?[id, text, n] := sup_src[id, n], n >= 2, not con[id, _], *claim{id, text}
   :order -n, id
   ```
-- `TEMPORAL_RELATIONS`: `?[before_id, after_id, relation] := member[before_id], *temporal_relation{before_id, after_id, relation}` + `:order before_id, after_id`
-- `SIMILAR_EVIDENCE` (vector leg, global): `?[id, claim_id, source_id, stance, excerpt, dist] := ~evidence:evidence_vec{id, claim_id, source_id, stance, excerpt | query: q, k: 8, ef: 64, bind_distance: dist}, q = vec($q)` + `:order dist, id`
+- `TEMPORAL_RELATIONS`: `?[before_id, after_id, relation] := *temporal_relation{dossier_id: $dossier_id, before_id, after_id, relation}` + `:order before_id, after_id`
+- `SIMILAR_EVIDENCE` (vector leg, global; binds `quality` from the index and joins `source_title` globally, so the renderer never needs a dossier-scoped lookup for a globally-nearest row): `?[id, claim_id, source_id, source_title, stance, excerpt, quality, dist] := ~evidence:evidence_vec{id, claim_id, source_id, stance, excerpt, quality | query: q, k: 8, ef: 64, bind_distance: dist}, q = vec($q), *source{id: source_id, title: source_title}` + `:order dist, id`
 - `SIMILAR_CLAIMS` (vector leg, global): `?[id, text, dist] := ~claim:claim_vec{id, text | query: q, k: 5, ef: 64, bind_distance: dist}, q = vec($q)` + `:order dist, id`
 
 ## File structure
