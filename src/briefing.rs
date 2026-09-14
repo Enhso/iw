@@ -263,6 +263,13 @@ fn render_situation_summary(ctx: &BriefingContext) -> String {
         })
         .collect();
 
+    let claim_lines: Vec<String> = ctx
+        .similar_claims
+        .iter()
+        .take(5)
+        .map(|row| row.text.clone())
+        .collect();
+
     let mut actor_lines: Vec<String> = Vec::new();
     for kind in ACTOR_KIND_ORDER {
         let names: Vec<&str> = ctx
@@ -277,8 +284,10 @@ fn render_situation_summary(ctx: &BriefingContext) -> String {
     }
 
     format!(
-        "Evidence closest to the question:\n{evidence}\n\nActors:\n{actors}",
+        "Evidence closest to the question:\n{evidence}\n\nClaims closest to the question:\n\
+{claims}\n\nActors:\n{actors}",
         evidence = bullets_or(&evidence_lines, "No evidence recorded."),
+        claims = bullets_or(&claim_lines, "No claims recorded."),
         actors = bullets_or(&actor_lines, "No actors recorded."),
     )
 }
@@ -394,11 +403,17 @@ fn render_competing_hypotheses(ctx: &BriefingContext) -> String {
         .iter()
         .enumerate()
         .map(|(n, claim)| {
+            let concerns = claim_subject_names(ctx, &claim.id);
+            let concerns = if concerns.is_empty() {
+                "none recorded.".to_string()
+            } else {
+                concerns.join(", ")
+            };
             let supporting = evidence_bullets(ctx, &claim.id, "supports");
             let contradicting = evidence_bullets(ctx, &claim.id, "contradicts");
             format!(
-                "### H{n}: {text}\n\nSupporting evidence:\n{supporting}\n\nContradicting \
-evidence:\n{contradicting}",
+                "### H{n}: {text}\n\nConcerns: {concerns}\n\nSupporting evidence:\n{supporting}\
+\n\nContradicting evidence:\n{contradicting}",
                 n = n + 1,
                 text = claim.text,
                 supporting = bullets_or(&supporting, "None recorded."),
@@ -407,6 +422,16 @@ evidence:\n{contradicting}",
         })
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+/// Returns the `name_of` resolutions of `claim_id`'s subject ids from
+/// `ctx.claim_subjects`, in `claim_subjects` order.
+fn claim_subject_names(ctx: &BriefingContext, claim_id: &str) -> Vec<String> {
+    ctx.claim_subjects
+        .iter()
+        .filter(|(claim, _)| claim == claim_id)
+        .map(|(_, subject_id)| name_of(ctx, subject_id))
+        .collect()
 }
 
 /// Returns `- <excerpt> [<source title>, <quality word>]` lines (without
@@ -842,6 +867,53 @@ mod tests {
         assert_eq!(section.title, "Competing Hypotheses");
         let heading_count = section.body.matches("### H").count();
         assert_eq!(heading_count, hypothesis_count);
+    }
+
+    #[test]
+    fn situation_summary_lists_claims_closest_to_the_question() {
+        let (payload, briefing) = fixture_briefing();
+        let section = &briefing.sections[1];
+        assert_eq!(section.title, "Situation Summary");
+        assert!(section.body.contains("Claims closest to the question:"));
+
+        let hypothesis_texts: Vec<&str> = payload
+            .claims
+            .iter()
+            .filter(|claim| claim.kind == "hypothesis")
+            .map(|claim| claim.text.as_str())
+            .collect();
+        assert!(
+            hypothesis_texts
+                .iter()
+                .any(|text| section.body.contains(text)),
+            "Situation Summary should contain at least one hypothesis text"
+        );
+    }
+
+    #[test]
+    fn competing_hypotheses_names_concerns_from_claim_subjects() {
+        let (_, briefing) = fixture_briefing();
+        let section = &briefing.sections[4];
+        assert_eq!(section.title, "Competing Hypotheses");
+
+        let heading = "### H2: Export controls durably slow China's access to advanced \
+semiconductor manufacturing capability, rather than merely delaying it.";
+        let start = section
+            .body
+            .find(heading)
+            .unwrap_or_else(|| panic!("missing heading for clm:controls-durably-slow-china"));
+        let concerns_line = section.body[start..]
+            .lines()
+            .find(|line| line.starts_with("Concerns:"))
+            .expect("Concerns line present under the heading");
+        assert!(
+            concerns_line.contains("China"),
+            "concerns line: {concerns_line}"
+        );
+        assert!(
+            concerns_line.contains("United States"),
+            "concerns line: {concerns_line}"
+        );
     }
 
     #[test]
