@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>ArXiv Query Results</title>
+  <id>http://arxiv.org/api/fixture</id>
+  <updated>2025-11-01T00:00:00Z</updated>
+  <opensearch:totalResults xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">3</opensearch:totalResults>
+  <opensearch:startIndex xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">0</opensearch:startIndex>
+  <opensearch:itemsPerPage xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">3</opensearch:itemsPerPage>
+  <entry>
+    <id>http://arxiv.org/abs/9999.00001v1</id>
+    <updated>2024-03-12T00:00:00Z</updated>
+    <published>2024-03-11T00:00:00Z</published>
+    <title>
+      Modeling the Durability of Technology Export Controls: A Framework for Advanced Manufacturing Sectors
+    </title>
+    <summary>
+      We develop a formal framework for assessing how long a technology export control regime can constrain a target country's manufacturing capability before domestic substitution or workaround engineering erodes the restriction's effect. The model treats a control regime as a race between two adaptation rates: the pace at which the restricting coalition can identify and close circumvention channels, and the pace at which the target country can either substitute domestic equipment for the restricted inputs or engineer process workarounds that reduce dependence on the restricted technology entirely. We apply the framework qualitatively to the case of lithography equipment controls aimed at advanced logic manufacturing, arguing that durability depends heavily on whether the restricted capability sits at a genuine technological choke point with few substitutable inputs, such as extreme ultraviolet scanners, or whether workaround paths such as multipatterned deep ultraviolet lithography exist that can partially substitute at a cost penalty. We find that controls targeting a narrow, monopolized chokepoint tend to remain binding longer than controls targeting a broader technology class with several viable alternative suppliers or process routes, and we discuss how iterative rule updates that close identified circumvention channels can extend a control regime's effective binding period even where a workaround technically exists.
+    </summary>
+    <author><name>A. Renwick</name></author>
+    <author><name>S. Okafor</name></author>
+    <category term="econ.GN" />
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/9999.00002v1</id>
+    <updated>2024-09-05T00:00:00Z</updated>
+    <published>2024-09-04T00:00:00Z</published>
+    <title>
+      Domestic Substitution Dynamics Under Sanction Pressure: Evidence from the Semiconductor Equipment Sector
+    </title>
+    <summary>
+      This paper examines how firms in a sanctioned economy reallocate research and development spending toward domestic substitutes once foreign suppliers become unreliable. Using a panel of equipment-sector firm filings from a jurisdiction subject to escalating technology export restrictions between 2019 and 2023, we document a marked increase in domestic patent filings for lithography, etch, and deposition tool subsystems following each successive restriction, alongside a rise in state-directed capital allocated to firms working on these subsystems. We argue that export restrictions function as an unintended industrial policy signal, concentrating private and state investment on the exact technology categories the restrictions target, which over a multi-year horizon narrows but does not close the capability gap with incumbent suppliers. Case interviews with equipment engineers suggest that the substitution process is bottlenecked less by capital availability and more by accumulated process know-how, which cannot be replicated through funding alone and instead requires extended iterative engineering cycles on production-representative tools. We conclude that sanction-driven substitution dynamics can accelerate the timeline for a target country's indigenous capability without necessarily achieving parity with the restricted technology within the observed window, and we suggest that policy evaluations of export controls should track domestic patenting and state investment flows as leading indicators of long-run erosion in control durability.
+    </summary>
+    <author><name>M. Tavares</name></author>
+    <author><name>H. Lindqvist</name></author>
+    <category term="econ.GN" />
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/9999.00003v1</id>
+    <updated>2025-02-18T00:00:00Z</updated>
+    <published>2025-02-17T00:00:00Z</published>
+    <title>
+      Cost Scaling of Multipatterned Deep Ultraviolet Lithography at Advanced Logic Nodes
+    </title>
+    <summary>
+      We present a process-cost model for multipatterned deep ultraviolet lithography as a substitute for extreme ultraviolet exposure at advanced logic nodes, calibrated against publicly reported foundry process step counts and tool throughput figures. The model decomposes per-wafer cost into exposure, etch, clean, and metrology steps required for self-aligned quadruple patterning relative to an equivalent single-exposure extreme ultraviolet flow, and separately estimates the yield penalty from added overlay error and defect opportunities introduced at each additional patterning cycle. Across the node range we examine, the model shows patterning-related cost per wafer rising steeply as target pitch shrinks, driven primarily by the multiplying number of exposure and etch cycles rather than by any single step's unit cost. We further model how yield loss compounds this effect, since each additional patterning cycle both adds direct process cost and reduces the fraction of dies that pass final test, doubling the effective cost impact at the tightest pitches we model. Our results suggest that multipatterned deep ultraviolet lithography remains a technically viable path to a narrow band of advanced-node geometries, consistent with recent foundry announcements of high-density logic production using this approach, but that the cost and yield penalties grow to a point where, at our modeled parameters, further node scaling without extreme ultraviolet access becomes difficult to sustain at commercially representative production volumes.
+    </summary>
+    <author><name>J. Park</name></author>
+    <author><name>D. Weisz</name></author>
+    <category term="physics.app-ph" />
+  </entry>
+</feed>

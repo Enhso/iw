@@ -1,0 +1,385 @@
+{
+  "schema_version": 1,
+  "question": "Can export controls durably slow China's access to advanced semiconductor manufacturing capability?",
+  "entities": [
+    {
+      "id": "ent:china",
+      "name": "China",
+      "kind": "country",
+      "description": "The target of the U.S.-led export control regime on advanced semiconductor manufacturing equipment and chips."
+    },
+    {
+      "id": "ent:united-states",
+      "name": "United States",
+      "kind": "country",
+      "description": "The country whose Bureau of Industry and Security administers the export control rules restricting China's access to advanced chipmaking technology."
+    },
+    {
+      "id": "ent:taiwan",
+      "name": "Taiwan",
+      "kind": "country",
+      "description": "Home of TSMC and the current leading-edge center of global logic chip manufacturing."
+    },
+    {
+      "id": "ent:smic",
+      "name": "SMIC",
+      "kind": "organization",
+      "description": "Semiconductor Manufacturing International Corporation, China's largest contract chipmaker and the firm behind the reported 7-nanometer-class logic node."
+    },
+    {
+      "id": "ent:tsmc",
+      "name": "TSMC",
+      "kind": "organization",
+      "description": "Taiwan Semiconductor Manufacturing Company, the world's largest contract chipmaker and an EUV-equipped leading-edge foundry."
+    },
+    {
+      "id": "ent:asml",
+      "name": "ASML",
+      "kind": "organization",
+      "description": "ASML Holding, the sole manufacturer of extreme ultraviolet lithography systems used in volume semiconductor production."
+    },
+    {
+      "id": "ent:bis",
+      "name": "BIS",
+      "kind": "organization",
+      "description": "The U.S. Bureau of Industry and Security, the Commerce Department agency that drafts and enforces the semiconductor export control rules."
+    },
+    {
+      "id": "ent:euv-lithography",
+      "name": "EUV lithography",
+      "kind": "technology",
+      "description": "Extreme ultraviolet lithography, used to pattern the most advanced logic chip features in a single exposure at 13.5-nanometer wavelength."
+    },
+    {
+      "id": "ent:duv-multipatterning",
+      "name": "DUV multipatterning",
+      "kind": "technology",
+      "description": "A technique that splits a single circuit layer into multiple deep ultraviolet exposure and etch cycles to approximate EUV-class pattern density."
+    },
+    {
+      "id": "ent:october-2022-export-controls",
+      "name": "October 2022 export controls",
+      "kind": "policy",
+      "description": "The BIS rule published October 7, 2022, imposing license requirements on exports to China of advanced logic chips, high-bandwidth memory, and chipmaking equipment."
+    }
+  ],
+  "events": [
+    {
+      "id": "evt:asml-euv-license-withheld-2019",
+      "name": "Dutch government withholds ASML EUV export license to China",
+      "occurred_at": "2019-01-01",
+      "description": "The Dutch government declined to renew a license that would have allowed ASML to ship an EUV lithography system to a Chinese customer, the first concrete restriction on EUV access to China.",
+      "actor_ids": [
+        "ent:asml",
+        "ent:united-states"
+      ]
+    },
+    {
+      "id": "evt:bis-export-controls-2022",
+      "name": "BIS publishes October 2022 export control rule",
+      "occurred_at": "2022-10-07",
+      "description": "The Bureau of Industry and Security issued a rule imposing license requirements on exports to China of advanced logic chips, high-bandwidth memory, and the equipment used to manufacture them.",
+      "actor_ids": [
+        "ent:bis",
+        "ent:united-states",
+        "ent:china"
+      ]
+    },
+    {
+      "id": "evt:huawei-mate-60-launch-2023",
+      "name": "Huawei launches Mate 60 Pro with SMIC 7-nanometer-class chip",
+      "occurred_at": "2023-08-29",
+      "description": "Huawei launched the Mate 60 Pro smartphone, later found by teardown analysts to contain an SMIC-made processor built on a 7-nanometer-class node produced without EUV lithography.",
+      "actor_ids": [
+        "ent:smic",
+        "ent:china"
+      ]
+    },
+    {
+      "id": "evt:bis-rule-update-2023",
+      "name": "BIS publishes October 2023 export control rule update",
+      "occurred_at": "2023-10-17",
+      "description": "The Bureau of Industry and Security updated its export control rule, tightening performance thresholds and extending controls to more non-U.S.-manufactured equipment.",
+      "actor_ids": [
+        "ent:bis",
+        "ent:united-states"
+      ]
+    },
+    {
+      "id": "evt:bis-rule-update-2024",
+      "name": "BIS publishes December 2024 export control rule update",
+      "occurred_at": "2024-12-02",
+      "description": "The Bureau of Industry and Security added further restricted entities and tightened servicing restrictions on previously sold equipment already installed in Chinese fabs.",
+      "actor_ids": [
+        "ent:bis",
+        "ent:united-states"
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "id": "src:arxiv-9999-00003v1",
+      "title": "Cost Scaling of Multipatterned Deep Ultraviolet Lithography at Advanced Logic Nodes",
+      "url": "http://arxiv.org/abs/9999.00003v1",
+      "provider": "arxiv",
+      "published": "2025-02-17",
+      "retrieved_at": "2026-09-14T00:00:00Z"
+    },
+    {
+      "id": "src:arxiv-9999-00002v1",
+      "title": "Domestic Substitution Dynamics Under Sanction Pressure: Evidence from the Semiconductor Equipment Sector",
+      "url": "http://arxiv.org/abs/9999.00002v1",
+      "provider": "arxiv",
+      "published": "2024-09-04",
+      "retrieved_at": "2026-09-14T00:00:00Z"
+    },
+    {
+      "id": "src:arxiv-9999-00001v1",
+      "title": "Modeling the Durability of Technology Export Controls: A Framework for Advanced Manufacturing Sectors",
+      "url": "http://arxiv.org/abs/9999.00001v1",
+      "provider": "arxiv",
+      "published": "2024-03-11",
+      "retrieved_at": "2026-09-14T00:00:00Z"
+    },
+    {
+      "id": "src:wikipedia-extreme-ultraviolet-lithography",
+      "title": "Extreme ultraviolet lithography",
+      "url": "https://en.wikipedia.org/wiki/Extreme_ultraviolet_lithography",
+      "provider": "wikipedia",
+      "published": "",
+      "retrieved_at": "2026-09-14T00:00:00Z"
+    },
+    {
+      "id": "src:wikipedia-semiconductor-industry-in-china",
+      "title": "Semiconductor industry in China",
+      "url": "https://en.wikipedia.org/wiki/Semiconductor_industry_in_China",
+      "provider": "wikipedia",
+      "published": "",
+      "retrieved_at": "2026-09-14T00:00:00Z"
+    },
+    {
+      "id": "src:wikipedia-united-states-export-controls-on-semiconductors",
+      "title": "United States export controls on semiconductors",
+      "url": "https://en.wikipedia.org/wiki/United_States_export_controls_on_semiconductors",
+      "provider": "wikipedia",
+      "published": "",
+      "retrieved_at": "2026-09-14T00:00:00Z"
+    }
+  ],
+  "claims": [
+    {
+      "id": "clm:controls-durably-slow-china",
+      "text": "Export controls durably slow China's access to advanced semiconductor manufacturing capability, rather than merely delaying it.",
+      "kind": "hypothesis",
+      "subject_ids": [
+        "ent:china",
+        "ent:united-states"
+      ]
+    },
+    {
+      "id": "clm:controls-accelerate-indigenous-substitution",
+      "text": "Export controls accelerate Chinese investment in indigenous semiconductor equipment and process substitutes, narrowing the capability gap over time.",
+      "kind": "hypothesis",
+      "subject_ids": [
+        "ent:china"
+      ]
+    },
+    {
+      "id": "clm:duv-multipatterning-sustains-7nm-workaround",
+      "text": "Multipatterned deep ultraviolet lithography can sustain a 7-nanometer-class manufacturing workaround for China's fabs, despite its high per-wafer cost.",
+      "kind": "hypothesis",
+      "subject_ids": [
+        "ent:china",
+        "ent:duv-multipatterning"
+      ]
+    },
+    {
+      "id": "clm:smic-achieved-7nm-class-node-2023",
+      "text": "SMIC produced logic chips on a process generation broadly comparable to a 7-nanometer-class node without EUV lithography, as demonstrated by the chip found in the Huawei Mate 60 Pro.",
+      "kind": "fact",
+      "subject_ids": [
+        "ent:smic",
+        "evt:huawei-mate-60-launch-2023"
+      ]
+    },
+    {
+      "id": "clm:bis-issued-three-rules-2022-2024",
+      "text": "The Bureau of Industry and Security issued three major semiconductor export control rules between October 2022 and December 2024.",
+      "kind": "fact",
+      "subject_ids": [
+        "ent:bis",
+        "ent:united-states"
+      ]
+    },
+    {
+      "id": "clm:asml-euv-license-denied-2019",
+      "text": "The Dutch government declined to renew ASML's export license for an EUV shipment to China in 2019.",
+      "kind": "fact",
+      "subject_ids": [
+        "ent:asml",
+        "evt:asml-euv-license-withheld-2019"
+      ]
+    },
+    {
+      "id": "clm:chinese-fabs-cannot-access-secondhand-euv",
+      "text": "Chinese fabs cannot obtain secondhand or resold EUV systems through third-party intermediaries to bypass direct export restrictions.",
+      "kind": "assumption",
+      "subject_ids": [
+        "ent:china"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "evd:controls-slowed-fab-buildouts",
+      "claim_id": "clm:controls-durably-slow-china",
+      "source_id": "src:wikipedia-united-states-export-controls-on-semiconductors",
+      "stance": "supports",
+      "excerpt": "Supporters argue that the controls have measurably slowed the rate at which Chinese fabs can add leading-edge capacity, pointing to reported delays in some announced fab buildouts and to public statements by equipment vendors describing lost China sales.",
+      "quality": 0.65
+    },
+    {
+      "id": "evd:china-adapted-via-stockpiling",
+      "claim_id": "clm:controls-durably-slow-china",
+      "source_id": "src:wikipedia-united-states-export-controls-on-semiconductors",
+      "stance": "contradicts",
+      "excerpt": "Skeptics counter that Chinese firms have adapted through stockpiling equipment ahead of each rule's effective date, through domestic substitution of controlled tools with homegrown alternatives, and through the multipatterned lithography workaround that allowed SMIC to reach 7-nanometer-class production without EUV equipment.",
+      "quality": 0.6
+    },
+    {
+      "id": "evd:chokepoint-controls-remain-binding",
+      "claim_id": "clm:controls-durably-slow-china",
+      "source_id": "src:arxiv-9999-00001v1",
+      "stance": "supports",
+      "excerpt": "controls targeting a narrow, monopolized chokepoint tend to remain binding longer than controls targeting a broader technology class with several viable alternative suppliers or process routes",
+      "quality": 0.55
+    },
+    {
+      "id": "evd:duv-reaches-euv-class-density",
+      "claim_id": "clm:duv-multipatterning-sustains-7nm-workaround",
+      "source_id": "src:wikipedia-extreme-ultraviolet-lithography",
+      "stance": "supports",
+      "excerpt": "multipatterned DUV can reach feature densities in the same broad class as an early EUV-based node, as demonstrated by SMIC's 7-nanometer-class production",
+      "quality": 0.7
+    },
+    {
+      "id": "evd:multipatterning-viable-narrow-band",
+      "claim_id": "clm:duv-multipatterning-sustains-7nm-workaround",
+      "source_id": "src:arxiv-9999-00003v1",
+      "stance": "supports",
+      "excerpt": "multipatterned deep ultraviolet lithography remains a technically viable path to a narrow band of advanced-node geometries, consistent with recent foundry announcements of high-density logic production using this approach",
+      "quality": 0.75
+    },
+    {
+      "id": "evd:multipatterning-cost-unsustainable-at-scale",
+      "claim_id": "clm:duv-multipatterning-sustains-7nm-workaround",
+      "source_id": "src:arxiv-9999-00003v1",
+      "stance": "contradicts",
+      "excerpt": "the cost and yield penalties grow to a point where, at our modeled parameters, further node scaling without extreme ultraviolet access becomes difficult to sustain at commercially representative production volumes",
+      "quality": 0.8
+    },
+    {
+      "id": "evd:smic-teardown-7nm-class-node",
+      "claim_id": "clm:smic-achieved-7nm-class-node-2023",
+      "source_id": "src:wikipedia-semiconductor-industry-in-china",
+      "stance": "supports",
+      "excerpt": "teardown analysts examining a smartphone processor found evidence that SMIC had produced logic circuitry using a process generation broadly comparable to a 7-nanometer-class node, achieved without EUV equipment by relying instead on repeated exposures with older deep ultraviolet scanners",
+      "quality": 0.9
+    },
+    {
+      "id": "evd:duv-density-matches-smic-node",
+      "claim_id": "clm:smic-achieved-7nm-class-node-2023",
+      "source_id": "src:wikipedia-extreme-ultraviolet-lithography",
+      "stance": "supports",
+      "excerpt": "multipatterned DUV can reach feature densities in the same broad class as an early EUV-based node, as demonstrated by SMIC's 7-nanometer-class production",
+      "quality": 0.7
+    },
+    {
+      "id": "evd:bis-2022-rule-details",
+      "claim_id": "clm:bis-issued-three-rules-2022-2024",
+      "source_id": "src:wikipedia-united-states-export-controls-on-semiconductors",
+      "stance": "supports",
+      "excerpt": "The first major rule, published on October 7, 2022, imposed license requirements on exports to China of logic chips at advanced process nodes, high-bandwidth memory, and the deposition, etch, and lithography tools used to make them.",
+      "quality": 0.5
+    },
+    {
+      "id": "evd:asml-euv-license-denied-2019",
+      "claim_id": "clm:asml-euv-license-denied-2019",
+      "source_id": "src:wikipedia-extreme-ultraviolet-lithography",
+      "stance": "supports",
+      "excerpt": "The Dutch government first moved to restrict EUV exports to China in 2019, under diplomatic pressure from Washington, by declining to renew a export license that would have allowed ASML to ship an EUV system to a Chinese customer.",
+      "quality": 0.8
+    },
+    {
+      "id": "evd:domestic-patent-filings-increase",
+      "claim_id": "clm:controls-accelerate-indigenous-substitution",
+      "source_id": "src:arxiv-9999-00002v1",
+      "stance": "supports",
+      "excerpt": "we document a marked increase in domestic patent filings for lithography, etch, and deposition tool subsystems following each successive restriction, alongside a rise in state-directed capital allocated to firms working on these subsystems",
+      "quality": 0.6
+    },
+    {
+      "id": "evd:china-subsidy-tool-ecosystem-growth",
+      "claim_id": "clm:controls-accelerate-indigenous-substitution",
+      "source_id": "src:wikipedia-semiconductor-industry-in-china",
+      "stance": "supports",
+      "excerpt": "Proponents of this strategy point to measurable increases in domestic equipment shipments and a growing roster of Chinese-origin lithography, etch, and deposition tool suppliers as evidence that the subsidy program is closing gaps in the supply chain",
+      "quality": 0.4
+    }
+  ],
+  "causal_links": [
+    {
+      "cause_id": "evt:asml-euv-license-withheld-2019",
+      "effect_id": "evt:bis-export-controls-2022",
+      "mechanism": "The 2019 Dutch denial of an EUV shipment set a precedent for treating advanced chipmaking equipment as a national-security export concern, which the 2022 BIS rule broadened into a formal licensing regime covering a wide range of fabrication tools.",
+      "confidence": "medium"
+    },
+    {
+      "cause_id": "evt:bis-export-controls-2022",
+      "effect_id": "evt:huawei-mate-60-launch-2023",
+      "mechanism": "Denied direct access to EUV-class tools and facing tightening equipment controls, SMIC pursued a DUV multipatterning process that ultimately yielded the 7-nanometer-class logic used in the Huawei Mate 60 Pro.",
+      "confidence": "medium"
+    },
+    {
+      "cause_id": "evt:huawei-mate-60-launch-2023",
+      "effect_id": "clm:duv-multipatterning-sustains-7nm-workaround",
+      "mechanism": "The Mate 60 Pro's SMIC-made processor is the clearest public demonstration cited for the broader claim that multipatterned DUV lithography can sustain a 7-nanometer-class node.",
+      "confidence": "medium"
+    },
+    {
+      "cause_id": "evt:bis-export-controls-2022",
+      "effect_id": "clm:controls-accelerate-indigenous-substitution",
+      "mechanism": "By cutting off imported tool and chip supply, the 2022 rule increased the incentive for Chinese firms and state investment vehicles to fund domestic substitutes.",
+      "confidence": "medium"
+    },
+    {
+      "cause_id": "evt:bis-rule-update-2023",
+      "effect_id": "clm:controls-durably-slow-china",
+      "mechanism": "Closing the loopholes identified in the original 2022 rule reduced the channels through which Chinese buyers could obtain restricted chips, reinforcing the case that the control regime constrains capability over time.",
+      "confidence": "low"
+    },
+    {
+      "cause_id": "clm:duv-multipatterning-sustains-7nm-workaround",
+      "effect_id": "clm:controls-durably-slow-china",
+      "mechanism": "A durable but costly multipatterning workaround limits China's advanced-node output to a narrow set of high-value products, which bears on whether the broader control regime should be judged as durably constraining or merely raising costs.",
+      "confidence": "low"
+    }
+  ],
+  "temporal_relations": [
+    {
+      "before_id": "evt:asml-euv-license-withheld-2019",
+      "after_id": "evt:bis-export-controls-2022",
+      "relation": "before"
+    },
+    {
+      "before_id": "evt:bis-export-controls-2022",
+      "after_id": "evt:huawei-mate-60-launch-2023",
+      "relation": "before"
+    },
+    {
+      "before_id": "evt:bis-rule-update-2023",
+      "after_id": "evt:bis-rule-update-2024",
+      "relation": "before"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "batchcomplete": "",
+  "continue": {
+    "sroffset": 3,
+    "continue": "-||"
+  },
+  "query": {
+    "searchinfo": {
+      "totalhits": 3
+    },
+    "search": [
+      {
+        "ns": 0,
+        "title": "Semiconductor industry in China",
+        "pageid": 900001,
+        "size": 42000,
+        "wordcount": 5200,
+        "snippet": "China's <span class=\"searchmatch\">semiconductor</span> industry has expanded rapidly.",
+        "timestamp": "2026-06-01T00:00:00Z"
+      },
+      {
+        "ns": 0,
+        "title": "United States export controls on semiconductors",
+        "pageid": 900002,
+        "size": 38500,
+        "wordcount": 4700,
+        "snippet": "The United States has tightened <span class=\"searchmatch\">export controls</span> on advanced chip technology.",
+        "timestamp": "2026-05-15T00:00:00Z"
+      },
+      {
+        "ns": 0,
+        "title": "Extreme ultraviolet lithography",
+        "pageid": 900003,
+        "size": 29800,
+        "wordcount": 3600,
+        "snippet": "<span class=\"searchmatch\">Extreme ultraviolet lithography</span> is used to pattern the smallest chip features.",
+        "timestamp": "2026-04-20T00:00:00Z"
+      }
+    ]
+  }
+}
