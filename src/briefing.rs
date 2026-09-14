@@ -181,6 +181,18 @@ fn name_of(ctx: &BriefingContext, id: &str) -> String {
     id.to_string()
 }
 
+/// Returns every claim in `ctx` with both supporting and contradicting
+/// evidence, in `ctx.claims` order. This is the full, uncapped contested
+/// set; `ctx.cruxes` is this same set ranked by contestation plus
+/// downstream causal reach and capped at 3, so it undercounts whenever
+/// more than 3 claims are contested.
+fn contested_claims(ctx: &BriefingContext) -> Vec<&ClaimStanceRow> {
+    ctx.claims
+        .iter()
+        .filter(|claim| claim.supports > 0 && claim.contradicts > 0)
+        .collect()
+}
+
 /// Resolves a source id in `ctx` to its display title. Falls back to the
 /// raw id if no source in `ctx` has that id.
 fn source_title(ctx: &BriefingContext, source_id: &str) -> String {
@@ -225,7 +237,7 @@ claims, {evidence} evidence items from {sources} sources.\n\nThe situation turns
         sources = ctx.sources.len(),
         cruxes = bullets_or(&crux_lines, "No cruxes recorded."),
         consensus = ctx.consensus.len(),
-        contested = ctx.cruxes.len(),
+        contested = contested_claims(ctx).len(),
     )
 }
 
@@ -626,14 +638,16 @@ fn render_open_questions(ctx: &BriefingContext) -> String {
             .map(|claim| format!("\"{}\" is unverified: no evidence recorded.", claim.text)),
     );
 
-    let info_lines: Vec<String> = ctx
-        .cruxes
+    // One bullet per contested claim (uncapped), not per crux: `ctx.cruxes`
+    // is the same set ranked and capped at 3, which would undercount this
+    // list whenever more than 3 claims are contested.
+    let info_lines: Vec<String> = contested_claims(ctx)
         .iter()
-        .map(|crux| {
+        .map(|claim| {
             let mut source_ids: Vec<String> = ctx
                 .evidence
                 .iter()
-                .filter(|evidence| evidence.claim_id == crux.id)
+                .filter(|evidence| evidence.claim_id == claim.id)
                 .map(|evidence| evidence.source_id.clone())
                 .collect();
             source_ids.sort_unstable();
@@ -644,7 +658,7 @@ fn render_open_questions(ctx: &BriefingContext) -> String {
                 .collect();
             format!(
                 "New evidence on \"{text}\" from a source other than: {sources}",
-                text = crux.text,
+                text = claim.text,
                 sources = titles.join(", "),
             )
         })
@@ -699,7 +713,7 @@ fn render_source_appendix(ctx: &BriefingContext) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{dossier_id_for, Entity, ExtractionPayload};
+    use crate::model::{dossier_id_for, Claim, Entity, Evidence, ExtractionPayload, Source};
     use crate::store::GraphStore;
 
     const FIXTURE: &str = include_str!(concat!(
@@ -938,6 +952,106 @@ mod tests {
         assert!(
             placeholder_count > 0,
             "expected at least one 'No ...' placeholder"
+        );
+    }
+
+    /// Contested-claim count must come from the full `supports > 0 &&
+    /// contradicts > 0` set on `ctx.claims`, not from `ctx.cruxes`, which is
+    /// that same set ranked and capped at 3 by the CRUXES query. Builds a
+    /// dossier with 4 contested claims and no causal links, so every crux's
+    /// score is `supports + contradicts` with no downstream tie-breaker
+    /// needed, and checks the two counts diverge as expected.
+    #[test]
+    fn contested_claim_count_is_uncapped_unlike_crux_list() {
+        let entity = Entity {
+            id: "ent:only-one".to_string(),
+            name: "Only One".to_string(),
+            kind: "organization".to_string(),
+            description: "A minimal handcrafted entity.".to_string(),
+        };
+        let source = Source {
+            id: "src:only-one".to_string(),
+            title: "Only Source".to_string(),
+            url: "https://example.com/only-source".to_string(),
+            provider: "wikipedia".to_string(),
+            published: String::new(),
+            retrieved_at: CREATED_AT.to_string(),
+        };
+
+        let mut claims = Vec::new();
+        let mut evidence = Vec::new();
+        for n in 1..=4 {
+            let claim_id = format!("clm:contested-{n}");
+            claims.push(Claim {
+                id: claim_id.clone(),
+                text: format!("Contested claim number {n}."),
+                kind: "hypothesis".to_string(),
+                subject_ids: vec![entity.id.clone()],
+            });
+            evidence.push(Evidence {
+                id: format!("evd:supports-{n}"),
+                claim_id: claim_id.clone(),
+                source_id: source.id.clone(),
+                stance: "supports".to_string(),
+                excerpt: format!("Supporting excerpt for claim {n}."),
+                quality: 0.5,
+            });
+            evidence.push(Evidence {
+                id: format!("evd:contradicts-{n}"),
+                claim_id: claim_id.clone(),
+                source_id: source.id.clone(),
+                stance: "contradicts".to_string(),
+                excerpt: format!("Contradicting excerpt for claim {n}."),
+                quality: 0.5,
+            });
+        }
+
+        let payload = ExtractionPayload {
+            schema_version: 1,
+            question: "Are there more than 3 contested claims in this dossier?".to_string(),
+            entities: vec![entity],
+            events: vec![],
+            sources: vec![source],
+            claims,
+            evidence,
+            causal_links: vec![],
+            temporal_relations: vec![],
+        };
+
+        let store = GraphStore::open_memory().expect("open store");
+        store.init_schema().expect("init schema");
+        let report = store.ingest(&payload, CREATED_AT).expect("ingest payload");
+
+        let cruxes = store.cruxes(&report.dossier_id).expect("cruxes");
+        assert_eq!(cruxes.len(), 3, "CRUXES query should cap at 3");
+
+        let ctx = build_context(&store, &report.dossier_id)
+            .expect("build_context")
+            .expect("dossier exists");
+        let briefing = render(&ctx);
+
+        let overview = &briefing.sections[0];
+        assert_eq!(overview.title, "Executive Overview");
+        assert!(
+            overview.body.contains("4 are contested."),
+            "Executive Overview should report the uncapped count of 4, got: {}",
+            overview.body
+        );
+
+        let open_questions = &briefing.sections[9];
+        assert_eq!(open_questions.title, "Open Questions");
+        let info_bullet_count = open_questions.body.matches("New evidence on").count();
+        assert_eq!(
+            info_bullet_count, 4,
+            "Open Questions should have one 'New evidence on' bullet per contested claim"
+        );
+
+        let crux_analysis = &briefing.sections[6];
+        assert_eq!(crux_analysis.title, "Crux Analysis");
+        let crux_heading_count = crux_analysis.body.matches("### Crux").count();
+        assert!(
+            crux_heading_count <= 3,
+            "Crux Analysis should stay capped at 3 headings, got {crux_heading_count}"
         );
     }
 }
