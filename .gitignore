@@ -15,4 +15,4 @@ test-output/
 # SDD scratch
 .superpowers/
 # Stray hook artifact directory (literal name)
-/$HOME/
+$HOME/
