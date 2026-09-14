@@ -97,13 +97,20 @@ impl ResearchWorker {
         let child = command
             .spawn()
             .map_err(|err| ResearchError::Spawn(err.to_string()))?;
-        let pid = child.id();
+        // Guards the process group `child` leads: if this future is ever
+        // dropped before the group has been waited on (a timeout below, or
+        // the caller cancelling this whole `run` call, e.g. via
+        // `JoinHandle::abort`), the guard's `Drop` impl kills the group.
+        #[cfg(unix)]
+        let mut guard = ProcessGroupGuard::new(child.id());
 
         let output = match tokio::time::timeout(self.timeout, child.wait_with_output()).await {
-            Ok(wait_result) => wait_result.map_err(|err| ResearchError::Spawn(err.to_string()))?,
-            Err(_elapsed) => {
+            Ok(wait_result) => {
                 #[cfg(unix)]
-                kill_process_group(pid);
+                guard.disarm();
+                wait_result.map_err(|err| ResearchError::Spawn(err.to_string()))?
+            }
+            Err(_elapsed) => {
                 return Err(ResearchError::Timeout(self.timeout));
             }
         };
@@ -172,6 +179,46 @@ fn kill_process_group(pid: Option<u32>) {
     }
 }
 
+/// Guards a spawned worker's process group, killing it via
+/// [`kill_process_group`] on drop unless [`Self::disarm`] was called
+/// first.
+///
+/// `Command::kill_on_drop` (set in [`ResearchWorker::run`]) only reaches
+/// the immediate `uv` process, not the Python grandchild it forks, so it
+/// cannot alone clean up either a timeout or a cancelled `run` call (the
+/// caller dropping `run`'s future, e.g. via `JoinHandle::abort`). Both
+/// cases drop this guard while it is still armed, which is exactly when
+/// the whole process group needs killing.
+#[cfg(unix)]
+struct ProcessGroupGuard {
+    pid: Option<u32>,
+    armed: bool,
+}
+
+#[cfg(unix)]
+impl ProcessGroupGuard {
+    /// Arms a guard for the process group led by `pid`.
+    fn new(pid: Option<u32>) -> Self {
+        Self { pid, armed: true }
+    }
+
+    /// Disarms this guard so its `Drop` impl does not kill the process
+    /// group. Call this once the worker has been waited on, successfully
+    /// or not: the group no longer needs an unconditional kill.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            kill_process_group(self.pid);
+        }
+    }
+}
+
 /// Returns the last `max_chars` characters of `bytes`, decoded lossily as
 /// UTF-8.
 fn tail_chars(bytes: &[u8], max_chars: usize) -> String {
@@ -187,6 +234,7 @@ fn tail_chars(bytes: &[u8], max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     /// Returns this crate's manifest directory, the repository root.
@@ -247,6 +295,7 @@ mod tests {
         assert_eq!(payload.claims.len(), 7);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn timeout_returns_timeout_error() {
         let dir = tempfile::tempdir().expect("create tempdir");
@@ -356,6 +405,59 @@ mod tests {
             assert!(
                 std::time::Instant::now() < deadline,
                 "grandchild process {grandchild_pid} is still running 3s after timeout"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Proves `ResearchWorker::run` kills the worker's whole process group
+    /// when the caller cancels the request (drops `run`'s future), not
+    /// just on a timeout: starts `run()` inside a `tokio::spawn`, waits for
+    /// the same grandchild-backgrounding stub script's pid file, then
+    /// aborts the task instead of waiting for it to finish.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn cancelled_run_kills_worker_process_group() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let script_path = dir.path().join("iw-slow-uv-stub.sh");
+        let pid_file = dir.path().join("grandchild.pid");
+        let script_contents = format!(
+            "#!/bin/sh\nsleep 30 &\necho $! > \"{}\"\nwait\n",
+            pid_file.display()
+        );
+        std::fs::write(&script_path, script_contents).expect("write stub script");
+        let mut permissions = std::fs::metadata(&script_path)
+            .expect("stat stub script")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script_path, permissions).expect("chmod stub script");
+
+        let worker = ResearchWorker {
+            uv_bin: script_path,
+            python_dir: manifest_dir().join("python"),
+            fixture_dir: None,
+            timeout: Duration::from_secs(30),
+        };
+
+        let handle = tokio::spawn(async move {
+            worker
+                .run("does cancellation kill the whole process group?")
+                .await
+        });
+
+        let grandchild_pid = read_grandchild_pid(&pid_file).await;
+
+        handle.abort();
+        let _ = handle.await;
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            if !process_is_alive(grandchild_pid) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "grandchild process {grandchild_pid} is still running 3s after cancellation"
             );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }

@@ -62,52 +62,54 @@ pub enum ConfigError {
 }
 
 impl Config {
-    /// Loads configuration from environment variables, applying the
-    /// documented default for any variable that is unset.
+    /// Loads configuration by calling `lookup` for each documented
+    /// environment variable, applying its documented default whenever
+    /// `lookup` returns `None`. Holds all the parsing; [`Self::from_env`]
+    /// is the thinnest possible wrapper around it.
     ///
     /// # Errors
-    /// Returns [`ConfigError::InvalidValue`] if `IW_DB_ENGINE` is set to
-    /// anything other than `mem` or `sqlite`, or if
-    /// `IW_WORKER_TIMEOUT_SECS` is set to a value that does not parse as a
-    /// `u64`.
-    pub fn from_env() -> Result<Self, ConfigError> {
-        let bind = env::var("IW_BIND").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+    /// Returns [`ConfigError::InvalidValue`] if `lookup("IW_DB_ENGINE")`
+    /// returns anything other than `None`, `Some("mem")`, or
+    /// `Some("sqlite")`, or if `lookup("IW_WORKER_TIMEOUT_SECS")` returns
+    /// `Some` a value that does not parse as a `u64`.
+    pub fn from_lookup<F: Fn(&str) -> Option<String>>(lookup: F) -> Result<Self, ConfigError> {
+        let bind = lookup("IW_BIND").unwrap_or_else(|| "127.0.0.1:8080".to_string());
 
-        let db_engine = match env::var("IW_DB_ENGINE") {
-            Ok(value) if value == "mem" => DbEngine::Memory,
-            Ok(value) if value == "sqlite" => DbEngine::Sqlite,
-            Ok(value) => {
+        let db_engine = match lookup("IW_DB_ENGINE") {
+            Some(value) if value == "mem" => DbEngine::Memory,
+            Some(value) if value == "sqlite" => DbEngine::Sqlite,
+            Some(value) => {
                 return Err(ConfigError::InvalidValue {
                     var: "IW_DB_ENGINE",
                     value,
                 })
             }
-            Err(_) => DbEngine::Memory,
+            None => DbEngine::Memory,
         };
 
-        let db_path = env::var("IW_DB_PATH")
+        let db_path = lookup("IW_DB_PATH")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("data/iw.sqlite"));
+            .unwrap_or_else(|| PathBuf::from("data/iw.sqlite"));
 
-        let uv_bin = env::var("IW_UV_BIN")
+        let uv_bin = lookup("IW_UV_BIN")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("uv"));
+            .unwrap_or_else(|| PathBuf::from("uv"));
 
-        let python_dir = env::var("IW_PYTHON_DIR")
+        let python_dir = lookup("IW_PYTHON_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("python"));
+            .unwrap_or_else(|| PathBuf::from("python"));
 
-        let fixture_dir = env::var("IW_FIXTURE_DIR").ok().map(PathBuf::from);
+        let fixture_dir = lookup("IW_FIXTURE_DIR").map(PathBuf::from);
 
-        let worker_timeout = match env::var("IW_WORKER_TIMEOUT_SECS") {
-            Ok(value) => {
+        let worker_timeout = match lookup("IW_WORKER_TIMEOUT_SECS") {
+            Some(value) => {
                 let secs: u64 = value.parse().map_err(|_| ConfigError::InvalidValue {
                     var: "IW_WORKER_TIMEOUT_SECS",
                     value: value.clone(),
                 })?;
                 Duration::from_secs(secs)
             }
-            Err(_) => Duration::from_secs(300),
+            None => Duration::from_secs(300),
         };
 
         Ok(Self {
@@ -120,44 +122,33 @@ impl Config {
             worker_timeout,
         })
     }
+
+    /// Loads configuration from environment variables, applying the
+    /// documented default for any variable that is unset. A thin wrapper
+    /// around [`Self::from_lookup`].
+    ///
+    /// # Errors
+    /// See [`Self::from_lookup`].
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Self::from_lookup(|key| env::var(key).ok())
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
-    use std::sync::Mutex;
 
-    /// Serializes tests that mutate process environment variables, since
-    /// `cargo test` runs tests within one process by default and
-    /// `Config::from_env` reads global state.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    /// Removes every `IW_*` variable this module reads, so each test below
-    /// starts from a clean slate regardless of what an earlier test set.
-    fn clear_env() {
-        for var in [
-            "IW_BIND",
-            "IW_DB_ENGINE",
-            "IW_DB_PATH",
-            "IW_UV_BIN",
-            "IW_PYTHON_DIR",
-            "IW_FIXTURE_DIR",
-            "IW_WORKER_TIMEOUT_SECS",
-        ] {
-            // Safety: guarded by `ENV_LOCK` so no other thread reads or
-            // writes these variables concurrently.
-            unsafe {
-                env::remove_var(var);
-            }
-        }
+    /// Builds a `lookup` closure over `vars` for [`Config::from_lookup`],
+    /// so tests never touch real process environment variables.
+    fn lookup_over(vars: HashMap<&'static str, &'static str>) -> impl Fn(&str) -> Option<String> {
+        move |key| vars.get(key).map(|value| (*value).to_string())
     }
 
     #[test]
     fn defaults_apply_when_unset() {
-        let _guard = ENV_LOCK.lock().expect("lock env mutex");
-        clear_env();
-
-        let config = Config::from_env().expect("defaults parse");
+        let config = Config::from_lookup(lookup_over(HashMap::new())).expect("defaults parse");
 
         assert_eq!(config.bind, "127.0.0.1:8080");
         assert_eq!(config.db_engine, DbEngine::Memory);
@@ -166,21 +157,13 @@ mod tests {
         assert_eq!(config.python_dir, PathBuf::from("python"));
         assert_eq!(config.fixture_dir, None);
         assert_eq!(config.worker_timeout, Duration::from_secs(300));
-
-        clear_env();
     }
 
     #[test]
     fn invalid_worker_timeout_is_rejected() {
-        let _guard = ENV_LOCK.lock().expect("lock env mutex");
-        clear_env();
-        // Safety: guarded by `ENV_LOCK`.
-        unsafe {
-            env::set_var("IW_WORKER_TIMEOUT_SECS", "not-a-number");
-        }
+        let vars = HashMap::from([("IW_WORKER_TIMEOUT_SECS", "not-a-number")]);
 
-        let result = Config::from_env();
-        clear_env();
+        let result = Config::from_lookup(lookup_over(vars));
 
         match result {
             Err(ConfigError::InvalidValue { var, value }) => {

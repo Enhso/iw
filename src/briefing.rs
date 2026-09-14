@@ -618,12 +618,13 @@ fn render_evidence_assessment(ctx: &BriefingContext) -> String {
         .map(|claim| claim.text.clone())
         .collect();
 
-    let all_secondary = !ctx.sources.is_empty()
-        && ctx
-            .sources
-            .iter()
-            .all(|source| source.provider == "wikipedia" || source.provider == "arxiv");
-    let bias_line = if all_secondary {
+    let bias_line = if ctx.sources.is_empty() {
+        "No sources recorded."
+    } else if ctx
+        .sources
+        .iter()
+        .all(|source| source.provider == "wikipedia" || source.provider == "arxiv")
+    {
         "All sources are secondary (encyclopedic or preprint); no primary documents, official \
 statements, or industry data were consulted."
     } else {
@@ -1022,6 +1023,16 @@ semiconductor manufacturing capability, rather than merely delaying it.";
         assert!(
             placeholder_count > 0,
             "expected at least one 'No ...' placeholder"
+        );
+
+        let evidence_assessment = &briefing.sections[8];
+        assert_eq!(evidence_assessment.title, "Evidence Assessment");
+        assert!(
+            evidence_assessment
+                .body
+                .contains("Potential biases:\nNo sources recorded."),
+            "a zero-source dossier's bias line should read 'No sources recorded.': {}",
+            evidence_assessment.body
         );
     }
 
