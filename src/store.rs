@@ -155,7 +155,7 @@ pub struct SimilarClaimRow {
 
 /// A summary of what [`GraphStore::ingest`] wrote, one count per payload
 /// list plus the derived dossier id.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IngestReport {
     pub dossier_id: String,
     pub entities: usize,

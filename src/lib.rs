@@ -6,9 +6,12 @@
 //! feature-hashed text embedder, and the application error type shared by
 //! the Axum service built on top of it.
 
+pub mod app;
 pub mod briefing;
+pub mod config;
 pub mod embed;
 pub mod error;
 pub mod model;
+pub mod research;
 pub mod schema;
 pub mod store;

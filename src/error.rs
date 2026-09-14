@@ -34,6 +34,14 @@ impl From<crate::store::StoreError> for AppError {
     }
 }
 
+impl From<crate::research::ResearchError> for AppError {
+    /// Wraps a research worker failure as `AppError::Research`, carrying
+    /// the underlying error's formatted message.
+    fn from(err: crate::research::ResearchError) -> Self {
+        AppError::Research(err.to_string())
+    }
+}
+
 impl IntoResponse for AppError {
     /// Maps each variant to an HTTP status code and a JSON body of the form
     /// `{"error": "<message>"}`: `InvalidPayload` to 422, `Store` to 500,
