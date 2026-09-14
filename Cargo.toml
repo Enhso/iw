@@ -21,3 +21,6 @@ chrono = "0.4"
 http-body-util = "0.1"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
+
+[target."cfg(unix)".dependencies]
+nix = { version = "0.31.3", features = ["signal"] }

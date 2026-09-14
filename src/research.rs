@@ -86,15 +86,27 @@ impl ResearchWorker {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        // `uv run` forks the Python interpreter as its own child rather
+        // than exec'ing into it, so `kill_on_drop` above only kills `uv`
+        // itself on timeout and leaves the Python grandchild running,
+        // reparented. Making `uv` the leader of its own process group lets
+        // the timeout branch below kill that whole group, not just `uv`.
+        #[cfg(unix)]
+        command.process_group(0);
 
         let child = command
             .spawn()
             .map_err(|err| ResearchError::Spawn(err.to_string()))?;
+        let pid = child.id();
 
-        let output = tokio::time::timeout(self.timeout, child.wait_with_output())
-            .await
-            .map_err(|_| ResearchError::Timeout(self.timeout))?
-            .map_err(|err| ResearchError::Spawn(err.to_string()))?;
+        let output = match tokio::time::timeout(self.timeout, child.wait_with_output()).await {
+            Ok(wait_result) => wait_result.map_err(|err| ResearchError::Spawn(err.to_string()))?,
+            Err(_elapsed) => {
+                #[cfg(unix)]
+                kill_process_group(pid);
+                return Err(ResearchError::Timeout(self.timeout));
+            }
+        };
 
         if !output.status.success() {
             let stderr_tail = tail_chars(&output.stderr, 2000);
@@ -113,6 +125,50 @@ impl ResearchWorker {
             .map_err(|err| ResearchError::InvalidJson(err.to_string()))?;
         payload.validate()?;
         Ok(payload)
+    }
+}
+
+/// Kills the process group led by `pid` after a timeout.
+///
+/// `uv run` forks the Python interpreter as its own child rather than
+/// exec'ing into it, so killing only the immediate `uv` process (what
+/// `Command::kill_on_drop` does) leaves that Python grandchild running,
+/// reparented, after the timeout fires. `run` makes `uv` the leader of its
+/// own process group before spawning it, so `pid` doubles as the group id
+/// and signaling the group reaches both `uv` and the interpreter it
+/// forked.
+///
+/// A missing pid, or one that does not fit in the signed `pid_t` `killpg`
+/// expects, is logged and treated as nothing left to kill. `ESRCH` (the
+/// group is already gone) is treated as success; any other failure is
+/// logged. Neither case is propagated: the caller already has a
+/// [`ResearchError::Timeout`] to return regardless of whether the kill
+/// itself succeeded.
+#[cfg(unix)]
+fn kill_process_group(pid: Option<u32>) {
+    let Some(pid) = pid else {
+        tracing::warn!("research worker had no pid to kill after timing out");
+        return;
+    };
+    let Ok(pid) = i32::try_from(pid) else {
+        tracing::warn!(
+            pid,
+            "research worker pid does not fit in pid_t; cannot kill its process group"
+        );
+        return;
+    };
+    match nix::sys::signal::killpg(
+        nix::unistd::Pid::from_raw(pid),
+        nix::sys::signal::Signal::SIGKILL,
+    ) {
+        Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
+        Err(err) => {
+            tracing::warn!(
+                pid,
+                error = %err,
+                "failed to kill research worker process group after timeout"
+            );
+        }
     }
 }
 
@@ -216,5 +272,92 @@ mod tests {
             "run() should return promptly once the timeout fires"
         );
         assert!(matches!(result, Err(ResearchError::Timeout(_))));
+    }
+
+    /// Reads the grandchild pid `timeout_kills_worker_process_group`'s
+    /// stub script writes as soon as it starts, retrying briefly in case
+    /// the file has not appeared yet by the time `run()` returns.
+    #[cfg(target_os = "linux")]
+    async fn read_grandchild_pid(pid_file: &std::path::Path) -> i32 {
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        loop {
+            if let Ok(contents) = std::fs::read_to_string(pid_file) {
+                if let Ok(pid) = contents.trim().parse::<i32>() {
+                    return pid;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "grandchild pid file {} never appeared",
+                pid_file.display()
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// Returns whether `pid` is still a live, non-zombie process, by
+    /// inspecting `/proc/<pid>/stat`. A missing `/proc/<pid>` entry, or a
+    /// process state of `Z` (zombie, waiting to be reaped), both count as
+    /// dead.
+    #[cfg(target_os = "linux")]
+    fn process_is_alive(pid: i32) -> bool {
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            return false;
+        };
+        // The second field is the command name in parens, which may itself
+        // contain spaces or parens, so find the state field after the last
+        // ')' rather than splitting naively on whitespace.
+        let Some((_, after_comm)) = stat.rsplit_once(')') else {
+            return false;
+        };
+        after_comm.split_whitespace().next() != Some("Z")
+    }
+
+    /// Proves `ResearchWorker::run` kills the worker's whole process group
+    /// on timeout, not just the immediate `uv` process: the stub script
+    /// backgrounds a `sleep 30` grandchild and records its pid before
+    /// waiting on it, so if only the direct child were killed (what
+    /// `kill_on_drop` alone does), the grandchild would be reparented and
+    /// keep running.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn timeout_kills_worker_process_group() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let script_path = dir.path().join("iw-slow-uv-stub.sh");
+        let pid_file = dir.path().join("grandchild.pid");
+        let script_contents = format!(
+            "#!/bin/sh\nsleep 30 &\necho $! > \"{}\"\nwait\n",
+            pid_file.display()
+        );
+        std::fs::write(&script_path, script_contents).expect("write stub script");
+        let mut permissions = std::fs::metadata(&script_path)
+            .expect("stat stub script")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script_path, permissions).expect("chmod stub script");
+
+        let worker = ResearchWorker {
+            uv_bin: script_path,
+            python_dir: manifest_dir().join("python"),
+            fixture_dir: None,
+            timeout: Duration::from_millis(200),
+        };
+
+        let result = worker.run("does this kill the whole process group?").await;
+        assert!(matches!(result, Err(ResearchError::Timeout(_))));
+
+        let grandchild_pid = read_grandchild_pid(&pid_file).await;
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            if !process_is_alive(grandchild_pid) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "grandchild process {grandchild_pid} is still running 3s after timeout"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 }
