@@ -96,7 +96,7 @@ member[id] := *dossier_item{dossier_id: $dossier_id, item_id: id}
 /// Returns every `(event_id, entity_id)` participation pair for events in
 /// a dossier. Parameter: `$dossier_id`.
 pub const EVENT_ACTORS: &str = r#"
-member[event_id] := *dossier_item{dossier_id: $dossier_id, item_id: event_id}
+member[id] := *dossier_item{dossier_id: $dossier_id, item_id: id}
 ?[event_id, entity_id] := member[event_id], *event_actor{event_id, entity_id}
 "#;
 
@@ -113,7 +113,7 @@ member[id] := *dossier_item{dossier_id: $dossier_id, item_id: id}
 /// Returns every `(claim_id, subject_id)` pair for claims in a dossier.
 /// Parameter: `$dossier_id`.
 pub const CLAIM_SUBJECTS: &str = r#"
-member[claim_id] := *dossier_item{dossier_id: $dossier_id, item_id: claim_id}
+member[id] := *dossier_item{dossier_id: $dossier_id, item_id: id}
 ?[claim_id, subject_id] := member[claim_id], *claim_subject{claim_id, subject_id}
 "#;
 
@@ -148,7 +148,7 @@ con[c, count(e)] := member[c], *evidence{id: e, claim_id: c, stance: 'contradict
 /// mechanism, confidence)`, ordered by `cause_id`, `effect_id`. Parameter:
 /// `$dossier_id`.
 pub const CAUSAL_LINKS: &str = r#"
-member[cause_id] := *dossier_item{dossier_id: $dossier_id, item_id: cause_id}
+member[id] := *dossier_item{dossier_id: $dossier_id, item_id: id}
 ?[cause_id, effect_id, mechanism, confidence] :=
   member[cause_id], *causal_link{cause_id, effect_id, mechanism, confidence}
 :order cause_id, effect_id
@@ -204,7 +204,7 @@ con[c, count(e)] := member[c], *evidence{id: e, claim_id: c, stance: 'contradict
 /// relation)`, ordered by `before_id`, `after_id`. Parameter:
 /// `$dossier_id`.
 pub const TEMPORAL_RELATIONS: &str = r#"
-member[before_id] := *dossier_item{dossier_id: $dossier_id, item_id: before_id}
+member[id] := *dossier_item{dossier_id: $dossier_id, item_id: id}
 ?[before_id, after_id, relation] :=
   member[before_id], *temporal_relation{before_id, after_id, relation}
 :order before_id, after_id
