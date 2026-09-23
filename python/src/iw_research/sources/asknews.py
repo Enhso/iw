@@ -30,6 +30,13 @@ WIKI_URL = "https://api.asknews.app/v1/wiki/search"
 # (AskNews: last 30 days of news)".
 DEFAULT_HOURS_BACK = 720
 
+# AskNews rejects `n_articles` above this with a 400 on the plan tier this worker
+# has been run against (verified live 2026-09-23: 12, the request contract's own
+# `max_news` default -- contracts.md A1 -- already exceeds it). Clamping here keeps
+# a single misconfigured or over-eager request from silently zeroing out every news
+# document for the question instead of fetching the plan's actual maximum.
+MAX_N_ARTICLES = 10
+
 _STOPWORDS = frozenset(
     """
     a an the is are was were will would can could should of in on at to for and
@@ -126,7 +133,7 @@ def fetch_news(
         question: The research question.
         news_since: RFC 3339 UTC timestamp to start from, or `None` to use
             `hours_back=DEFAULT_HOURS_BACK`.
-        max_articles: `n_articles` for each query.
+        max_articles: `n_articles` for each query, clamped to `MAX_N_ARTICLES`.
         retrieved_at: RFC 3339 UTC timestamp to stamp onto each document.
 
     Returns:
@@ -135,7 +142,7 @@ def fetch_news(
         results (if any) are still returned.
     """
     params: dict[str, Any] = {
-        "n_articles": max_articles,
+        "n_articles": min(max_articles, MAX_N_ARTICLES),
         "return_type": "dicts",
         "method": "nl",
         "strategy": "default",

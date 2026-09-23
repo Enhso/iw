@@ -257,22 +257,6 @@
   ],
   "evidence": [
     {
-      "id": "evd:controls-slowed-fab-buildouts",
-      "claim_id": "clm:controls-durably-slow-china",
-      "source_id": "src:wikipedia:041e4de2d62f779e",
-      "stance": "supports",
-      "excerpt": "Supporters argue that the controls have measurably slowed the rate at which Chinese fabs can add leading-edge capacity, pointing to reported delays in some announced fab buildouts and to public statements by equipment vendors describing lost China sales.",
-      "quality": 0.65
-    },
-    {
-      "id": "evd:china-adapted-via-stockpiling",
-      "claim_id": "clm:controls-durably-slow-china",
-      "source_id": "src:wikipedia:041e4de2d62f779e",
-      "stance": "contradicts",
-      "excerpt": "Skeptics counter that Chinese firms have adapted through stockpiling equipment ahead of each rule's effective date, through domestic substitution of controlled tools with homegrown alternatives, and through the multipatterned lithography workaround that allowed SMIC to reach 7-nanometer-class production without EUV equipment.",
-      "quality": 0.6
-    },
-    {
       "id": "evd:chokepoint-controls-remain-binding",
       "claim_id": "clm:controls-durably-slow-china",
       "source_id": "src:arxiv:b457a59b56dd11ef",
@@ -305,28 +289,12 @@
       "quality": 0.8
     },
     {
-      "id": "evd:smic-teardown-7nm-class-node",
-      "claim_id": "clm:smic-achieved-7nm-class-node-2023",
-      "source_id": "src:wikipedia:c0d661fe10e6d398",
-      "stance": "supports",
-      "excerpt": "teardown analysts examining a smartphone processor found evidence that SMIC had produced logic circuitry using a process generation broadly comparable to a 7-nanometer-class node, achieved without EUV equipment by relying instead on repeated exposures with older deep ultraviolet scanners",
-      "quality": 0.9
-    },
-    {
       "id": "evd:duv-density-matches-smic-node",
       "claim_id": "clm:smic-achieved-7nm-class-node-2023",
       "source_id": "src:wikipedia:28aee3e3337f5c04",
       "stance": "supports",
       "excerpt": "multipatterned DUV can reach feature densities in the same broad class as an early EUV-based node, as demonstrated by SMIC's 7-nanometer-class production",
       "quality": 0.7
-    },
-    {
-      "id": "evd:bis-2022-rule-details",
-      "claim_id": "clm:bis-issued-three-rules-2022-2024",
-      "source_id": "src:wikipedia:041e4de2d62f779e",
-      "stance": "supports",
-      "excerpt": "The first major rule, published on October 7, 2022, imposed license requirements on exports to China of logic chips at advanced process nodes, high-bandwidth memory, and the deposition, etch, and lithography tools used to make them.",
-      "quality": 0.5
     },
     {
       "id": "evd:asml-euv-license-denied-2019",
@@ -343,6 +311,38 @@
       "stance": "supports",
       "excerpt": "we document a marked increase in domestic patent filings for lithography, etch, and deposition tool subsystems following each successive restriction, alongside a rise in state-directed capital allocated to firms working on these subsystems",
       "quality": 0.6
+    },
+    {
+      "id": "evd:controls-slowed-fab-buildouts",
+      "claim_id": "clm:controls-durably-slow-china",
+      "source_id": "src:wikipedia:041e4de2d62f779e",
+      "stance": "supports",
+      "excerpt": "Supporters argue that the controls have measurably slowed the rate at which Chinese fabs can add leading-edge capacity, pointing to reported delays in some announced fab buildouts and to public statements by equipment vendors describing lost China sales.",
+      "quality": 0.65
+    },
+    {
+      "id": "evd:china-adapted-via-stockpiling",
+      "claim_id": "clm:controls-durably-slow-china",
+      "source_id": "src:wikipedia:041e4de2d62f779e",
+      "stance": "contradicts",
+      "excerpt": "Skeptics counter that Chinese firms have adapted through stockpiling equipment ahead of each rule's effective date, through domestic substitution of controlled tools with homegrown alternatives, and through the multipatterned lithography workaround that allowed SMIC to reach 7-nanometer-class production without EUV equipment.",
+      "quality": 0.6
+    },
+    {
+      "id": "evd:smic-teardown-7nm-class-node",
+      "claim_id": "clm:smic-achieved-7nm-class-node-2023",
+      "source_id": "src:wikipedia:c0d661fe10e6d398",
+      "stance": "supports",
+      "excerpt": "teardown analysts examining a smartphone processor found evidence that SMIC had produced logic circuitry using a process generation broadly comparable to a 7-nanometer-class node, achieved without EUV equipment by relying instead on repeated exposures with older deep ultraviolet scanners",
+      "quality": 0.9
+    },
+    {
+      "id": "evd:bis-2022-rule-details",
+      "claim_id": "clm:bis-issued-three-rules-2022-2024",
+      "source_id": "src:wikipedia:041e4de2d62f779e",
+      "stance": "supports",
+      "excerpt": "The first major rule, published on October 7, 2022, imposed license requirements on exports to China of logic chips at advanced process nodes, high-bandwidth memory, and the deposition, etch, and lithography tools used to make them.",
+      "quality": 0.5
     },
     {
       "id": "evd:china-subsidy-tool-ecosystem-growth",

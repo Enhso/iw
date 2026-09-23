@@ -86,21 +86,98 @@ def test_filter_sources_keeps_relevant_non_injecting_passage() -> None:
     assert "kept" in gate_log[0].detail
 
 
-def test_filter_sources_drops_irrelevant_passage() -> None:
-    doc = _doc(title="Off Topic", url="https://irrelevant")
-    jev: Jev = _StubJev(
-        {
-            "Off Topic": {
-                "relevant": {"type": "noul", "noul": RELEVANCE_DROP_THRESHOLD - 0.01},
-                "injection": {"type": "noul", "noul": 0.0},
-            }
+def test_filter_sources_drops_irrelevant_passage_when_enough_others_pass() -> None:
+    # Five other documents clear the threshold, so the floor (`MIN_KEPT_DOCUMENTS`)
+    # is already satisfied and the sixth, off-topic document is dropped outright.
+    passing_docs = [
+        _doc(title=f"On Topic {i}", url=f"https://relevant-{i}") for i in range(5)
+    ]
+    off_topic = _doc(title="Off Topic", url="https://irrelevant")
+    answers = {
+        doc.title: {
+            "relevant": {"type": "noul", "noul": 0.9},
+            "injection": {"type": "noul", "noul": 0.0},
         }
-    )
-    kept, dropped, gate_log = filter_sources([doc], jev, "question?")
-    assert kept == []
+        for doc in passing_docs
+    }
+    answers["Off Topic"] = {
+        "relevant": {"type": "noul", "noul": RELEVANCE_DROP_THRESHOLD - 0.01},
+        "injection": {"type": "noul", "noul": 0.0},
+    }
+    jev: Jev = _StubJev(answers)
+
+    kept, dropped, _ = filter_sources([*passing_docs, off_topic], jev, "question?")
+
+    assert kept == passing_docs
     assert len(dropped) == 1
     assert dropped[0].reason == "irrelevant"
     assert dropped[0].url == "https://irrelevant"
+
+
+def test_filter_sources_promotes_below_threshold_docs_up_to_the_floor() -> None:
+    # Nothing clears the threshold, but there are only 3 candidates, so all 3 are
+    # promoted to keep the corpus from starving.
+    docs = [_doc(title=f"Weak {i}", url=f"https://weak-{i}") for i in range(3)]
+    scores = [0.05, 0.10, 0.12]
+    answers = {
+        doc.title: {
+            "relevant": {"type": "noul", "noul": score},
+            "injection": {"type": "noul", "noul": 0.0},
+        }
+        for doc, score in zip(docs, scores, strict=True)
+    }
+    jev: Jev = _StubJev(answers)
+
+    kept, dropped, gate_log = filter_sources(docs, jev, "question?")
+
+    assert kept == docs
+    assert dropped == []
+    assert any("promoted" in entry.detail for entry in gate_log)
+
+
+def test_filter_sources_promotes_only_the_top_scoring_below_threshold_docs() -> None:
+    # 7 below-threshold candidates; the floor of 5 promotes the top 5 by score and
+    # drops the remaining 2.
+    docs = [_doc(title=f"Weak {i}", url=f"https://weak-{i}") for i in range(7)]
+    scores = [0.14, 0.13, 0.12, 0.11, 0.10, 0.05, 0.01]  # descending
+    answers = {
+        doc.title: {
+            "relevant": {"type": "noul", "noul": score},
+            "injection": {"type": "noul", "noul": 0.0},
+        }
+        for doc, score in zip(docs, scores, strict=True)
+    }
+    jev: Jev = _StubJev(answers)
+
+    kept, dropped, _ = filter_sources(docs, jev, "question?")
+
+    assert kept == docs[:5]
+    assert {d.url for d in dropped} == {"https://weak-5", "https://weak-6"}
+    assert all(d.reason == "irrelevant" for d in dropped)
+
+
+def test_filter_sources_never_promotes_an_injection_drop() -> None:
+    # Even though the floor is unmet, the injecting document must not be promoted.
+    malicious = _doc(title="Malicious", url="https://malicious")
+    weak = _doc(title="Weak", url="https://weak")
+    jev: Jev = _StubJev(
+        {
+            "Malicious": {
+                "relevant": {"type": "noul", "noul": 0.9},
+                "injection": {"type": "noul", "noul": INJECTION_DROP_THRESHOLD + 0.01},
+            },
+            "Weak": {
+                "relevant": {"type": "noul", "noul": 0.05},
+                "injection": {"type": "noul", "noul": 0.0},
+            },
+        }
+    )
+
+    kept, dropped, _ = filter_sources([malicious, weak], jev, "question?")
+
+    assert kept == [weak]
+    assert len(dropped) == 1
+    assert dropped[0].reason == "injection"
 
 
 def test_filter_sources_drops_injecting_passage() -> None:

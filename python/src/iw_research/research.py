@@ -14,7 +14,7 @@ from pathlib import Path
 
 import httpx
 
-from .extract import extract
+from .extract import extract_batched
 from .gates import filter_sources, score_claim_support
 from .jev import Jev, jev_client_from_env, jev_fixture_client_from_dir
 from .llm import Completer, FixtureChatClient, client_from_env
@@ -145,7 +145,7 @@ def run_research(
         all_documents, jev, request.question
     )
 
-    payload = extract(request.question, kept_documents, completer)
+    payload = extract_batched(request.question, kept_documents, completer)
     # Restore every fetched document, including ones the relevance filter
     # dropped: the corpus keeps everything fetched, it just doesn't feed
     # extraction (contracts.md A2).

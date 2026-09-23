@@ -8,6 +8,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from iw_research.sources.asknews import (
+    MAX_N_ARTICLES,
     NEWS_URL,
     WIKI_URL,
     _keyword_query,
@@ -92,6 +93,32 @@ def test_fetch_news_runs_two_queries_and_dedupes_by_url(httpx_mock: HTTPXMock) -
     assert by_url["https://news.example.com/a"].title == "Article A"
     assert by_url["https://news.example.com/b"].text == "Summary B only"
     assert all(d.provider == "asknews_news" for d in docs)
+
+
+def test_fetch_news_clamps_n_articles_to_the_plan_maximum(
+    httpx_mock: HTTPXMock,
+) -> None:
+    # contracts.md A1's default `max_news` (12) exceeds what AskNews' plan
+    # accepts (verified live: a 400 above 10), so a request above the plan
+    # maximum must still be clamped down to it rather than sent as-is.
+    for _ in range(2):  # both queries (literal + keyword) must be clamped
+        httpx_mock.add_response(
+            url=httpx.URL(NEWS_URL, params={}).copy_merge_params(
+                {
+                    "query": "export controls",
+                    "n_articles": str(MAX_N_ARTICLES),
+                    "return_type": "dicts",
+                    "method": "nl",
+                    "strategy": "default",
+                    "hours_back": "720",
+                }
+            ),
+            json={"as_dicts": []},
+        )
+    with httpx.Client() as client:
+        fetch_news(client, "key", "export controls", None, 12, RETRIEVED_AT)
+    # `httpx_mock` raises on teardown if a registered response was never matched,
+    # so reaching here already proves both requests used the clamped value.
 
 
 def test_fetch_news_uses_start_timestamp_when_news_since_given(
