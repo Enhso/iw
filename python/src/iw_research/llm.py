@@ -1,11 +1,27 @@
 """OpenAI-compatible chat-completions client, plus a fixture stand-in."""
 
+import fnmatch
+import logging
 import os
 from pathlib import Path
 from typing import Protocol
 
 import httpx
 import orjson
+
+logger = logging.getLogger(__name__)
+
+# contracts.md B2: "no frontier spend in the worker, ever". Matched case-sensitively
+# with shell-glob wildcards against each configured LLM_MODEL chain entry.
+_FRONTIER_DENYLIST: tuple[str, ...] = (
+    "anthropic/claude-opus*",
+    "anthropic/claude-sonnet*",
+    "anthropic/claude-fable*",
+    "openai/gpt-6-astra*",
+    "openai/gpt-6-sol*",
+    "openai/gpt-5.5*",
+    "*-pro",
+)
 
 
 class LlmError(Exception):
@@ -77,6 +93,11 @@ class ChatClient:
         self._model = model
         self._client = client if client is not None else httpx.Client(timeout=timeout)
 
+    @property
+    def model(self) -> str:
+        """The model id this client requests completions from."""
+        return self._model
+
     def complete_json(self, system: str, user: str) -> dict[str, object]:
         """Request a JSON chat completion and parse its content.
 
@@ -146,23 +167,88 @@ class FixtureChatClient:
         return result
 
 
-def client_from_env() -> ChatClient:
-    """Build a `ChatClient` from `LLM_API_BASE`, `LLM_API_KEY`, `LLM_MODEL`.
+class FallbackChatClient:
+    """A `Completer` trying each model in a chain in order (contracts.md B2)."""
+
+    def __init__(self, clients: list[ChatClient]) -> None:
+        """Store the chain of per-model clients, tried first to last.
+
+        Args:
+            clients: The chain, in fallback order. Must be non-empty.
+
+        Raises:
+            LlmError: If `clients` is empty.
+        """
+        if not clients:
+            raise LlmError("model chain is empty")
+        self._clients = clients
+
+    def complete_json(self, system: str, user: str) -> dict[str, object]:
+        """Try each client in order, returning the first success.
+
+        Args:
+            system: The system prompt.
+            user: The user prompt.
+
+        Returns:
+            The parsed JSON object from the first model in the chain that
+            returns one.
+
+        Raises:
+            LlmError: The last model's error, if every model in the chain
+                raised `LlmError` (request failure, an HTTP error status
+                such as 429, or unparsable JSON content).
+        """
+        last_error: LlmError | None = None
+        for client in self._clients:
+            try:
+                return client.complete_json(system, user)
+            except LlmError as exc:
+                logger.warning(
+                    "model %s failed, trying next in chain: %s", client.model, exc
+                )
+                last_error = exc
+        assert last_error is not None  # `clients` is non-empty (checked in __init__)
+        raise last_error
+
+
+def _is_frontier_model(model: str) -> bool:
+    """Check `model` against the frontier denylist (contracts.md B2).
+
+    Args:
+        model: A single model id, e.g. `"anthropic/claude-opus-4"`.
 
     Returns:
-        A configured `ChatClient`.
+        True if `model` matches any of `_FRONTIER_DENYLIST`'s shell-glob
+        patterns.
+    """
+    return any(fnmatch.fnmatchcase(model, pattern) for pattern in _FRONTIER_DENYLIST)
+
+
+def client_from_env() -> Completer:
+    """Build the chat-completions client chain from `LLM_API_BASE`/`_API_KEY`/`_MODEL`.
+
+    `LLM_MODEL` is a comma-separated fallback chain (contracts.md B2): a
+    single model returns a plain `ChatClient`; two or more return a
+    `FallbackChatClient` that tries each in order on failure. Every model in
+    the chain is checked against the frontier denylist before any request is
+    made, since the worker must never spend on a frontier model.
+
+    Returns:
+        A configured `Completer`.
 
     Raises:
-        LlmError: If `LLM_API_KEY` or `LLM_MODEL` is unset, naming the
-            missing variable(s).
+        LlmError: If `LLM_API_KEY` or `LLM_MODEL` is unset (naming the
+            missing variable(s)), or if any model in the `LLM_MODEL` chain
+            matches the frontier denylist (naming the offending model(s)).
     """
     base_url = os.environ.get("LLM_API_BASE", "https://api.openai.com/v1")
     api_key = os.environ.get("LLM_API_KEY")
-    model = os.environ.get("LLM_MODEL")
+    model_chain = os.environ.get("LLM_MODEL")
 
     missing = [
         name
-        for name, value in (("LLM_API_KEY", api_key), ("LLM_MODEL", model))
+        for name, value in (("LLM_API_KEY", api_key), ("LLM_MODEL", model_chain))
         if not value
     ]
     if missing:
@@ -170,4 +256,17 @@ def client_from_env() -> ChatClient:
             f"missing required environment variable(s): {', '.join(missing)}"
         )
 
-    return ChatClient(base_url=base_url, api_key=api_key or "", model=model or "")
+    models = [m.strip() for m in (model_chain or "").split(",") if m.strip()]
+    denied = [m for m in models if _is_frontier_model(m)]
+    if denied:
+        raise LlmError(
+            "LLM_MODEL contains frontier model(s), which the worker refuses to "
+            f"call: {', '.join(denied)}"
+        )
+
+    clients = [
+        ChatClient(base_url=base_url, api_key=api_key or "", model=m) for m in models
+    ]
+    if len(clients) == 1:
+        return clients[0]
+    return FallbackChatClient(clients)

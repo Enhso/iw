@@ -12,27 +12,33 @@ import pytest
 
 from iw_research.schema import (
     ExtractionPayload,
+    content_sha256,
     is_valid_date,
     is_valid_id,
     is_valid_quality,
+    is_valid_source_id,
 )
+
+_SOURCE_CONTENT = "Some source content."
 
 
 def _base_raw(**overrides: object) -> dict[str, object]:
     data: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "question": "Q?",
         "entities": [
             {"id": "ent:china", "name": "China", "kind": "country", "description": "d"}
         ],
         "sources": [
             {
-                "id": "src:one",
+                "id": "src:wikipedia:0123456789abcdef",
                 "title": "T",
                 "url": "https://example.com",
                 "provider": "wikipedia",
                 "published": "",
                 "retrieved_at": "2026-09-14T00:00:00Z",
+                "content": _SOURCE_CONTENT,
+                "content_hash": content_sha256(_SOURCE_CONTENT),
             }
         ],
         "claims": [
@@ -55,7 +61,7 @@ def _assert_every_id_date_and_quality_is_valid(payload: ExtractionPayload) -> No
         assert is_valid_id(event.id)
         assert is_valid_date(event.occurred_at)
     for source in payload.sources:
-        assert is_valid_id(source.id)
+        assert is_valid_source_id(source.id)
         assert is_valid_date(source.published)
     for claim in payload.claims:
         assert is_valid_id(claim.id)
@@ -126,7 +132,7 @@ def test_long_claim_id_is_repaired_within_80_chars_and_evidence_remapped() -> No
             {
                 "id": "evd:one",
                 "claim_id": long_id,
-                "source_id": "src:one",
+                "source_id": "src:wikipedia:0123456789abcdef",
                 "stance": "supports",
                 "excerpt": "x",
                 "quality": 0.5,
@@ -167,7 +173,7 @@ def test_evidence_with_out_of_range_quality_is_dropped() -> None:
             {
                 "id": "evd:one",
                 "claim_id": "clm:one",
-                "source_id": "src:one",
+                "source_id": "src:wikipedia:0123456789abcdef",
                 "stance": "supports",
                 "excerpt": "x",
                 "quality": 7,
@@ -235,6 +241,44 @@ def test_duplicate_entity_id_keeps_first_and_logs_warning(
     assert [entity.name for entity in payload.entities] == ["First"]
     assert any(
         "duplicate" in record.message and "ent:china" in record.message
+        for record in caplog.records
+    )
+    _assert_every_id_date_and_quality_is_valid(payload)
+
+
+def test_source_with_invalid_v2_id_is_dropped_and_its_evidence_with_it(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    raw = _base_raw(
+        sources=[
+            {
+                "id": "src:not-a-v2-id",
+                "title": "T",
+                "url": "https://example.com",
+                "provider": "wikipedia",
+                "published": "",
+                "retrieved_at": "2026-09-14T00:00:00Z",
+                "content": _SOURCE_CONTENT,
+                "content_hash": content_sha256(_SOURCE_CONTENT),
+            }
+        ],
+        evidence=[
+            {
+                "id": "evd:one",
+                "claim_id": "clm:one",
+                "source_id": "src:not-a-v2-id",
+                "stance": "supports",
+                "excerpt": "x",
+                "quality": 0.5,
+            }
+        ],
+    )
+    with caplog.at_level(logging.WARNING):
+        payload = ExtractionPayload.from_untrusted(raw)
+    assert payload.sources == []
+    assert payload.evidence == []
+    assert any(
+        "invalid source id" in record.message and "src:not-a-v2-id" in record.message
         for record in caplog.records
     )
     _assert_every_id_date_and_quality_is_valid(payload)

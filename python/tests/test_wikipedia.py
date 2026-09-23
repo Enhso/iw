@@ -92,7 +92,7 @@ def test_search_and_fetch_returns_documents_with_expected_fields(
 
     assert len(docs) == 1
     doc = docs[0]
-    assert doc.id == "src:wikipedia-foo-bar"
+    assert doc.id == "src:wikipedia:de81548e676eb674"
     assert doc.provider == "wikipedia"
     assert doc.title == "Foo Bar"
     assert doc.url == "https://en.wikipedia.org/wiki/Foo_Bar"
@@ -126,9 +126,9 @@ def test_load_fixture_reuses_the_live_parsers(fixture_dir: Path) -> None:
     assert len(docs) == 3
     ids = {doc.id for doc in docs}
     assert ids == {
-        "src:wikipedia-semiconductor-industry-in-china",
-        "src:wikipedia-united-states-export-controls-on-semiconductors",
-        "src:wikipedia-extreme-ultraviolet-lithography",
+        "src:wikipedia:c0d661fe10e6d398",
+        "src:wikipedia:041e4de2d62f779e",
+        "src:wikipedia:28aee3e3337f5c04",
     }
     for doc in docs:
         assert doc.provider == "wikipedia"

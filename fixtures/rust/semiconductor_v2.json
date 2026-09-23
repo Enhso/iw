@@ -1,4 +1,6 @@
 {
+  "schema_version": 2,
+  "question": "Can export controls durably slow China's access to advanced semiconductor manufacturing capability?",
   "entities": [
     {
       "id": "ent:china",
@@ -114,6 +116,68 @@
       ]
     }
   ],
+  "sources": [
+    {
+      "id": "src:arxiv:65697ea6b9cc8d14",
+      "title": "Cost Scaling of Multipatterned Deep Ultraviolet Lithography at Advanced Logic Nodes",
+      "url": "http://arxiv.org/abs/9999.00003v1",
+      "provider": "arxiv",
+      "published": "2025-02-17",
+      "retrieved_at": "2026-09-14T00:00:00Z",
+      "content": "Cost Scaling of Multipatterned Deep Ultraviolet Lithography at Advanced Logic Nodes\n\nmultipatterned deep ultraviolet lithography remains a technically viable path to a narrow band of advanced-node geometries, consistent with recent foundry announcements of high-density logic production using this approach\n\nthe cost and yield penalties grow to a point where, at our modeled parameters, further node scaling without extreme ultraviolet access becomes difficult to sustain at commercially representative production volumes\n",
+      "content_hash": "5639921ea2a1ccb7fa5c2e6afdb25ebe0b38746abb05eba22edd159dab6a127a"
+    },
+    {
+      "id": "src:arxiv:a781fa3f3036193a",
+      "title": "Domestic Substitution Dynamics Under Sanction Pressure: Evidence from the Semiconductor Equipment Sector",
+      "url": "http://arxiv.org/abs/9999.00002v1",
+      "provider": "arxiv",
+      "published": "2024-09-04",
+      "retrieved_at": "2026-09-14T00:00:00Z",
+      "content": "Domestic Substitution Dynamics Under Sanction Pressure: Evidence from the Semiconductor Equipment Sector\n\nwe document a marked increase in domestic patent filings for lithography, etch, and deposition tool subsystems following each successive restriction, alongside a rise in state-directed capital allocated to firms working on these subsystems\n",
+      "content_hash": "752d2907c467bc94f99712d0ee0a8cbe8256edec2a3a8b40aa8fabe47d47f540"
+    },
+    {
+      "id": "src:arxiv:b457a59b56dd11ef",
+      "title": "Modeling the Durability of Technology Export Controls: A Framework for Advanced Manufacturing Sectors",
+      "url": "http://arxiv.org/abs/9999.00001v1",
+      "provider": "arxiv",
+      "published": "2024-03-11",
+      "retrieved_at": "2026-09-14T00:00:00Z",
+      "content": "Modeling the Durability of Technology Export Controls: A Framework for Advanced Manufacturing Sectors\n\ncontrols targeting a narrow, monopolized chokepoint tend to remain binding longer than controls targeting a broader technology class with several viable alternative suppliers or process routes\n",
+      "content_hash": "f795b0d695cb37fbb1e1479cb8c754260339c25ae67d73119bbee79208642eed"
+    },
+    {
+      "id": "src:wikipedia:28aee3e3337f5c04",
+      "title": "Extreme ultraviolet lithography",
+      "url": "https://en.wikipedia.org/wiki/Extreme_ultraviolet_lithography",
+      "provider": "wikipedia",
+      "published": "",
+      "retrieved_at": "2026-09-14T00:00:00Z",
+      "content": "Extreme ultraviolet lithography\n\nmultipatterned DUV can reach feature densities in the same broad class as an early EUV-based node, as demonstrated by SMIC's 7-nanometer-class production\n\nmultipatterned DUV can reach feature densities in the same broad class as an early EUV-based node, as demonstrated by SMIC's 7-nanometer-class production\n\nThe Dutch government first moved to restrict EUV exports to China in 2019, under diplomatic pressure from Washington, by declining to renew a export license that would have allowed ASML to ship an EUV system to a Chinese customer.\n",
+      "content_hash": "0c11ca6c056cca480846e1119e0f575932965e246c23b5183b66a7a4591bce29"
+    },
+    {
+      "id": "src:wikipedia:c0d661fe10e6d398",
+      "title": "Semiconductor industry in China",
+      "url": "https://en.wikipedia.org/wiki/Semiconductor_industry_in_China",
+      "provider": "wikipedia",
+      "published": "",
+      "retrieved_at": "2026-09-14T00:00:00Z",
+      "content": "Semiconductor industry in China\n\nteardown analysts examining a smartphone processor found evidence that SMIC had produced logic circuitry using a process generation broadly comparable to a 7-nanometer-class node, achieved without EUV equipment by relying instead on repeated exposures with older deep ultraviolet scanners\n\nProponents of this strategy point to measurable increases in domestic equipment shipments and a growing roster of Chinese-origin lithography, etch, and deposition tool suppliers as evidence that the subsidy program is closing gaps in the supply chain\n",
+      "content_hash": "fb4e9db3455ab94ee5f54504208f740a948c347ffd51346b57ff6d076bbf71c7"
+    },
+    {
+      "id": "src:wikipedia:041e4de2d62f779e",
+      "title": "United States export controls on semiconductors",
+      "url": "https://en.wikipedia.org/wiki/United_States_export_controls_on_semiconductors",
+      "provider": "wikipedia",
+      "published": "",
+      "retrieved_at": "2026-09-14T00:00:00Z",
+      "content": "United States export controls on semiconductors\n\nSupporters argue that the controls have measurably slowed the rate at which Chinese fabs can add leading-edge capacity, pointing to reported delays in some announced fab buildouts and to public statements by equipment vendors describing lost China sales.\n\nSkeptics counter that Chinese firms have adapted through stockpiling equipment ahead of each rule's effective date, through domestic substitution of controlled tools with homegrown alternatives, and through the multipatterned lithography workaround that allowed SMIC to reach 7-nanometer-class production without EUV equipment.\n\nThe first major rule, published on October 7, 2022, imposed license requirements on exports to China of logic chips at advanced process nodes, high-bandwidth memory, and the deposition, etch, and lithography tools used to make them.\n",
+      "content_hash": "b0262cfb0b6e8cf6599092afbbf3c9c6ac7c5bf737c4babdd16442e9dde88f94"
+    }
+  ],
   "claims": [
     {
       "id": "clm:controls-durably-slow-china",
@@ -122,7 +186,9 @@
       "subject_ids": [
         "ent:china",
         "ent:united-states"
-      ]
+      ],
+      "support": 0.5,
+      "support_method": "jev"
     },
     {
       "id": "clm:controls-accelerate-indigenous-substitution",
@@ -130,7 +196,9 @@
       "kind": "hypothesis",
       "subject_ids": [
         "ent:china"
-      ]
+      ],
+      "support": 0.65,
+      "support_method": "jev"
     },
     {
       "id": "clm:duv-multipatterning-sustains-7nm-workaround",
@@ -139,7 +207,9 @@
       "subject_ids": [
         "ent:china",
         "ent:duv-multipatterning"
-      ]
+      ],
+      "support": 0.45,
+      "support_method": "jev"
     },
     {
       "id": "clm:smic-achieved-7nm-class-node-2023",
@@ -148,7 +218,9 @@
       "subject_ids": [
         "ent:smic",
         "evt:huawei-mate-60-launch-2023"
-      ]
+      ],
+      "support": 0.9,
+      "support_method": "jev"
     },
     {
       "id": "clm:bis-issued-three-rules-2022-2024",
@@ -157,7 +229,9 @@
       "subject_ids": [
         "ent:bis",
         "ent:united-states"
-      ]
+      ],
+      "support": 0.75,
+      "support_method": "jev"
     },
     {
       "id": "clm:asml-euv-license-denied-2019",
@@ -166,7 +240,9 @@
       "subject_ids": [
         "ent:asml",
         "evt:asml-euv-license-withheld-2019"
-      ]
+      ],
+      "support": 0.85,
+      "support_method": "jev"
     },
     {
       "id": "clm:chinese-fabs-cannot-access-secondhand-euv",
@@ -174,7 +250,9 @@
       "kind": "assumption",
       "subject_ids": [
         "ent:china"
-      ]
+      ],
+      "support": null,
+      "support_method": "none"
     }
   ],
   "evidence": [
@@ -329,5 +407,23 @@
       "after_id": "evt:bis-rule-update-2024",
       "relation": "before"
     }
-  ]
+  ],
+  "gate_log": [
+    {
+      "gate": "family",
+      "status": "skipped",
+      "detail": "no family provided in fixture request"
+    },
+    {
+      "gate": "relevance",
+      "status": "ok",
+      "detail": "8 passages scored, 0 dropped"
+    },
+    {
+      "gate": "support",
+      "status": "ok",
+      "detail": "7 claims scored via jev"
+    }
+  ],
+  "dropped_sources": []
 }

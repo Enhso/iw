@@ -1,15 +1,32 @@
 //! The mnestic-backed graph store: schema initialization, atomic dossier
-//! ingestion, and typed query methods for every named query in
-//! [`crate::schema`].
+//! ingestion, typed query methods for every named query in
+//! [`crate::schema`], and the as-of-aware family/document/history reads
+//! layered on top of them (`docs/contracts.md` §C/§D in the `betomcat`
+//! repository).
+//!
+//! Every read method here takes an `as_of: &str` argument: either an RFC
+//! 3339 UTC string or the literal `"NOW"` ([`AS_OF_NOW`]), passed straight
+//! through to mnestic's `:as_of` block option. A handful of read paths
+//! (family/document/history listings, family resolution) pull an entire
+//! small relation into Rust and filter/join it there rather than writing a
+//! single Datalog query for it; these relations are expected to stay small
+//! at Phase-1/personal-forecasting-bot scale, and doing the join in Rust
+//! made the merge-chain-following and cross-relation logic easier to get
+//! right than encoding it as recursive Datalog under a deadline. This is a
+//! deliberate scale/complexity tradeoff, not an oversight.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use cozo::{DataValue, DbInstance, NamedRows, ScriptMutability};
 
 use crate::embed::embed;
-use crate::model::{dossier_id_for, ExtractionPayload};
+use crate::model::{dossier_id_for, sha256_hex, ExtractionPayload, HistoryItem};
 use crate::schema;
+
+/// The `:as_of` value meaning "current state" (mnestic's own `'NOW'`
+/// literal).
+pub const AS_OF_NOW: &str = "NOW";
 
 /// A handle to an open mnestic database, with schema initialization,
 /// atomic ingestion, and typed query methods.
@@ -35,6 +52,11 @@ pub enum StoreError {
     /// accessor expected.
     #[error("unexpected row shape in {query}: {detail}")]
     RowShape { query: &'static str, detail: String },
+    /// [`GraphStore::mint_family_id`] could not find an unused id after a
+    /// generous number of `-N` suffixes; treated as an invariant violation
+    /// rather than a normal error path.
+    #[error("could not mint a unique family id for label {label:?} after {attempts} attempts")]
+    FamilyIdExhausted { label: String, attempts: u32 },
 }
 
 /// A named entity row returned by [`GraphStore::entities`].
@@ -64,6 +86,7 @@ pub struct SourceRow {
     pub provider: String,
     pub published: String,
     pub retrieved_at: String,
+    pub content_hash: String,
 }
 
 /// An evidence row returned by [`GraphStore::evidence`].
@@ -86,6 +109,14 @@ pub struct ClaimStanceRow {
     pub kind: String,
     pub supports: i64,
     pub contradicts: i64,
+}
+
+/// A claim's support score, returned by [`GraphStore::claim_support`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClaimSupportRow {
+    pub claim_id: String,
+    pub support: Option<f64>,
+    pub method: String,
 }
 
 /// A causal link row returned by [`GraphStore::causal_links`].
@@ -169,6 +200,90 @@ pub struct IngestReport {
     pub temporal_relations: usize,
 }
 
+/// A family record, returned by [`GraphStore::all_families`] and rendered
+/// as `GET /api/families` rows by the caller (`docs/contracts.md` §C3).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FamilyRow {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub created_at: String,
+    pub merged_into: Option<String>,
+}
+
+/// A `(dossier_id, created_at)` pair, returned by [`GraphStore::all_dossiers`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct DossierRow {
+    pub id: String,
+    pub created_at: String,
+}
+
+/// A `(question_id, family_id, probability, method)` tag, returned by
+/// [`GraphStore::all_question_families`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuestionFamilyRow {
+    pub question_id: String,
+    pub family_id: String,
+    pub probability: Option<f64>,
+    pub method: String,
+}
+
+/// A document row returned by [`GraphStore::documents`]
+/// (`docs/contracts.md` §C3).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct DocumentRow {
+    pub source_id: String,
+    pub url: String,
+    pub title: String,
+    pub provider: String,
+    pub published: String,
+    pub fetched_at: String,
+    pub content_hash: String,
+    /// Populated only when the caller asked for `include_content=true`.
+    pub content: Option<String>,
+}
+
+/// One evidence item nested under a [`ClaimView`] (`docs/contracts.md`
+/// §C2 `ClaimView`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ClaimEvidenceView {
+    pub source_id: String,
+    pub title: String,
+    pub url: String,
+    pub provider: String,
+    pub published: String,
+    pub fetched_at: String,
+    pub content_hash: String,
+    pub stance: String,
+    pub excerpt: String,
+}
+
+/// A claim with its support score, owning dossier, and evidence, returned
+/// by [`GraphStore::claim_views`] and [`GraphStore::claim_views_for_dossiers`]
+/// (`docs/contracts.md` §C2 `ClaimView`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ClaimView {
+    pub claim_id: String,
+    pub text: String,
+    pub kind: String,
+    pub support: Option<f64>,
+    pub support_method: String,
+    pub dossier_id: String,
+    pub evidence: Vec<ClaimEvidenceView>,
+}
+
+/// A raw document to ingest without extraction, for `POST /api/documents`
+/// (`docs/contracts.md` §C4).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RawDocument {
+    pub url: String,
+    pub title: String,
+    pub provider: String,
+    pub published: String,
+    pub fetched_at: String,
+    pub content: String,
+}
+
 impl GraphStore {
     /// Opens an in-memory mnestic database. Used by tests and by any run
     /// that does not need to persist across process restarts.
@@ -220,7 +335,13 @@ impl GraphStore {
     }
 
     /// Ingests `payload` as one dossier, atomically, via
-    /// [`schema::INGEST_SCRIPT`].
+    /// [`schema::INGEST_SCRIPT`]. `question_id`, when given, tags the
+    /// dossier with the question it answers (`dossier_question`).
+    ///
+    /// Every relation `:put` here appends a new `tt` version rather than
+    /// overwriting, so re-ingesting the same dossier (e.g. a source's
+    /// content changed since the last research run) keeps every prior
+    /// version reachable via `:as_of`.
     ///
     /// # Preconditions
     /// The caller must have already called `payload.validate()`
@@ -233,10 +354,11 @@ impl GraphStore {
     pub fn ingest(
         &self,
         payload: &ExtractionPayload,
+        question_id: Option<&str>,
         created_at: &str,
     ) -> Result<IngestReport, StoreError> {
         let dossier_id = dossier_id_for(&payload.question);
-        let params = ingest_params(payload, &dossier_id, created_at);
+        let params = ingest_params(payload, &dossier_id, question_id, created_at);
 
         self.db
             .run_script(schema::INGEST_SCRIPT, params, ScriptMutability::Mutable)
@@ -254,13 +376,14 @@ impl GraphStore {
         })
     }
 
-    /// Returns every entity in `dossier_id`, ordered by kind then name.
+    /// Returns every entity in `dossier_id` as of `as_of`, ordered by kind
+    /// then name.
     ///
     /// # Errors
     /// Returns [`StoreError::Db`] if the query fails, or
     /// [`StoreError::RowShape`] if a row does not match the expected shape.
-    pub fn entities(&self, dossier_id: &str) -> Result<Vec<EntityRow>, StoreError> {
-        let rows = self.run(schema::ENTITIES, dossier_param(dossier_id))?;
+    pub fn entities(&self, dossier_id: &str, as_of: &str) -> Result<Vec<EntityRow>, StoreError> {
+        let rows = self.run(schema::ENTITIES, dossier_param(dossier_id, as_of))?;
         rows.rows
             .iter()
             .map(|row| {
@@ -274,14 +397,14 @@ impl GraphStore {
             .collect()
     }
 
-    /// Returns every event in `dossier_id`, ordered by occurrence date then
-    /// name.
+    /// Returns every event in `dossier_id` as of `as_of`, ordered by
+    /// occurrence date then name.
     ///
     /// # Errors
     /// Returns [`StoreError::Db`] if the query fails, or
     /// [`StoreError::RowShape`] if a row does not match the expected shape.
-    pub fn events(&self, dossier_id: &str) -> Result<Vec<EventRow>, StoreError> {
-        let rows = self.run(schema::EVENTS, dossier_param(dossier_id))?;
+    pub fn events(&self, dossier_id: &str, as_of: &str) -> Result<Vec<EventRow>, StoreError> {
+        let rows = self.run(schema::EVENTS, dossier_param(dossier_id, as_of))?;
         rows.rows
             .iter()
             .map(|row| {
@@ -296,13 +419,17 @@ impl GraphStore {
     }
 
     /// Returns every `(event_id, entity_id)` participation pair for events
-    /// in `dossier_id`.
+    /// in `dossier_id` as of `as_of`.
     ///
     /// # Errors
     /// Returns [`StoreError::Db`] if the query fails, or
     /// [`StoreError::RowShape`] if a row does not match the expected shape.
-    pub fn event_actors(&self, dossier_id: &str) -> Result<Vec<(String, String)>, StoreError> {
-        let rows = self.run(schema::EVENT_ACTORS, dossier_param(dossier_id))?;
+    pub fn event_actors(
+        &self,
+        dossier_id: &str,
+        as_of: &str,
+    ) -> Result<Vec<(String, String)>, StoreError> {
+        let rows = self.run(schema::EVENT_ACTORS, dossier_param(dossier_id, as_of))?;
         rows.rows
             .iter()
             .map(|row| {
@@ -314,37 +441,65 @@ impl GraphStore {
             .collect()
     }
 
-    /// Returns every source in `dossier_id`, ordered by provider then
-    /// title.
+    /// Returns every source in `dossier_id` as of `as_of`, ordered by
+    /// provider then title.
     ///
     /// # Errors
     /// Returns [`StoreError::Db`] if the query fails, or
     /// [`StoreError::RowShape`] if a row does not match the expected shape.
-    pub fn sources(&self, dossier_id: &str) -> Result<Vec<SourceRow>, StoreError> {
-        let rows = self.run(schema::SOURCES, dossier_param(dossier_id))?;
+    pub fn sources(&self, dossier_id: &str, as_of: &str) -> Result<Vec<SourceRow>, StoreError> {
+        let rows = self.run(schema::SOURCES, dossier_param(dossier_id, as_of))?;
         rows.rows
             .iter()
-            .map(|row| {
-                Ok(SourceRow {
-                    id: str_at(row, 0, "sources")?,
-                    title: str_at(row, 1, "sources")?,
-                    url: str_at(row, 2, "sources")?,
-                    provider: str_at(row, 3, "sources")?,
-                    published: str_at(row, 4, "sources")?,
-                    retrieved_at: str_at(row, 5, "sources")?,
-                })
-            })
+            .map(|row| source_row(row, "sources"))
             .collect()
     }
 
-    /// Returns every `(claim_id, subject_id)` pair for claims in
-    /// `dossier_id`.
+    /// Returns every source globally as of `as_of` (no dossier scoping),
+    /// ordered by provider then title, capped at `limit`.
     ///
     /// # Errors
     /// Returns [`StoreError::Db`] if the query fails, or
     /// [`StoreError::RowShape`] if a row does not match the expected shape.
-    pub fn claim_subjects(&self, dossier_id: &str) -> Result<Vec<(String, String)>, StoreError> {
-        let rows = self.run(schema::CLAIM_SUBJECTS, dossier_param(dossier_id))?;
+    pub fn all_sources(&self, as_of: &str, limit: usize) -> Result<Vec<SourceRow>, StoreError> {
+        let mut params = as_of_param(as_of);
+        params.insert("limit".to_string(), DataValue::from(limit as i64));
+        let rows = self.run(schema::ALL_SOURCES, params)?;
+        rows.rows
+            .iter()
+            .map(|row| source_row(row, "all_sources"))
+            .collect()
+    }
+
+    /// Looks up a blob's content by its `content_hash`. `blob` is plain
+    /// (content-addressed, immutable), so there is no `as_of` parameter.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Db`] if the query fails, or
+    /// [`StoreError::RowShape`] if the row does not match the expected
+    /// shape.
+    pub fn blob_content(&self, content_hash: &str) -> Result<Option<String>, StoreError> {
+        let mut params = BTreeMap::new();
+        params.insert("content_hash".to_string(), DataValue::from(content_hash));
+        let rows = self.run(schema::BLOB_CONTENT, params)?;
+        match rows.rows.first() {
+            Some(row) => Ok(Some(str_at(row, 0, "blob_content")?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Returns every `(claim_id, subject_id)` pair for claims in
+    /// `dossier_id` as of `as_of`.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Db`] if the query fails, or
+    /// [`StoreError::RowShape`] if a row does not match the expected shape.
+    pub fn claim_subjects(
+        &self,
+        dossier_id: &str,
+        as_of: &str,
+    ) -> Result<Vec<(String, String)>, StoreError> {
+        let rows = self.run(schema::CLAIM_SUBJECTS, dossier_param(dossier_id, as_of))?;
         rows.rows
             .iter()
             .map(|row| {
@@ -356,14 +511,14 @@ impl GraphStore {
             .collect()
     }
 
-    /// Returns every evidence row in `dossier_id`, ordered by claim then
-    /// id.
+    /// Returns every evidence row in `dossier_id` as of `as_of`, ordered by
+    /// claim then id.
     ///
     /// # Errors
     /// Returns [`StoreError::Db`] if the query fails, or
     /// [`StoreError::RowShape`] if a row does not match the expected shape.
-    pub fn evidence(&self, dossier_id: &str) -> Result<Vec<EvidenceRow>, StoreError> {
-        let rows = self.run(schema::EVIDENCE, dossier_param(dossier_id))?;
+    pub fn evidence(&self, dossier_id: &str, as_of: &str) -> Result<Vec<EvidenceRow>, StoreError> {
+        let rows = self.run(schema::EVIDENCE, dossier_param(dossier_id, as_of))?;
         rows.rows
             .iter()
             .map(|row| {
@@ -379,14 +534,18 @@ impl GraphStore {
             .collect()
     }
 
-    /// Returns every claim in `dossier_id` with zero-filled
+    /// Returns every claim in `dossier_id` as of `as_of` with zero-filled
     /// support/contradict evidence counts, ordered by id.
     ///
     /// # Errors
     /// Returns [`StoreError::Db`] if the query fails, or
     /// [`StoreError::RowShape`] if a row does not match the expected shape.
-    pub fn claims_with_stance(&self, dossier_id: &str) -> Result<Vec<ClaimStanceRow>, StoreError> {
-        let rows = self.run(schema::CLAIMS_WITH_STANCE, dossier_param(dossier_id))?;
+    pub fn claims_with_stance(
+        &self,
+        dossier_id: &str,
+        as_of: &str,
+    ) -> Result<Vec<ClaimStanceRow>, StoreError> {
+        let rows = self.run(schema::CLAIMS_WITH_STANCE, dossier_param(dossier_id, as_of))?;
         rows.rows
             .iter()
             .map(|row| {
@@ -401,14 +560,41 @@ impl GraphStore {
             .collect()
     }
 
-    /// Returns every causal link in `dossier_id`, ordered by cause then
-    /// effect.
+    /// Returns every claim's support score in `dossier_id` as of `as_of`.
     ///
     /// # Errors
     /// Returns [`StoreError::Db`] if the query fails, or
     /// [`StoreError::RowShape`] if a row does not match the expected shape.
-    pub fn causal_links(&self, dossier_id: &str) -> Result<Vec<CausalLinkRow>, StoreError> {
-        let rows = self.run(schema::CAUSAL_LINKS, dossier_param(dossier_id))?;
+    pub fn claim_support(
+        &self,
+        dossier_id: &str,
+        as_of: &str,
+    ) -> Result<Vec<ClaimSupportRow>, StoreError> {
+        let rows = self.run(schema::CLAIM_SUPPORT, dossier_param(dossier_id, as_of))?;
+        rows.rows
+            .iter()
+            .map(|row| {
+                Ok(ClaimSupportRow {
+                    claim_id: str_at(row, 0, "claim_support")?,
+                    support: opt_float_at(row, 1, "claim_support")?,
+                    method: str_at(row, 2, "claim_support")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Returns every causal link in `dossier_id` as of `as_of`, ordered by
+    /// cause then effect.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Db`] if the query fails, or
+    /// [`StoreError::RowShape`] if a row does not match the expected shape.
+    pub fn causal_links(
+        &self,
+        dossier_id: &str,
+        as_of: &str,
+    ) -> Result<Vec<CausalLinkRow>, StoreError> {
+        let rows = self.run(schema::CAUSAL_LINKS, dossier_param(dossier_id, as_of))?;
         rows.rows
             .iter()
             .map(|row| {
@@ -422,14 +608,18 @@ impl GraphStore {
             .collect()
     }
 
-    /// Returns every causal chain in `dossier_id`, longest first, then
-    /// ordered by start then end.
+    /// Returns every causal chain in `dossier_id` as of `as_of`, longest
+    /// first, then ordered by start then end.
     ///
     /// # Errors
     /// Returns [`StoreError::Db`] if the query fails, or
     /// [`StoreError::RowShape`] if a row does not match the expected shape.
-    pub fn causal_chains(&self, dossier_id: &str) -> Result<Vec<CausalChainRow>, StoreError> {
-        let rows = self.run(schema::CAUSAL_CHAINS, dossier_param(dossier_id))?;
+    pub fn causal_chains(
+        &self,
+        dossier_id: &str,
+        as_of: &str,
+    ) -> Result<Vec<CausalChainRow>, StoreError> {
+        let rows = self.run(schema::CAUSAL_CHAINS, dossier_param(dossier_id, as_of))?;
         rows.rows
             .iter()
             .map(|row| {
@@ -442,14 +632,14 @@ impl GraphStore {
             .collect()
     }
 
-    /// Returns up to 3 crux claims in `dossier_id`, highest score first,
-    /// then ordered by id.
+    /// Returns up to 3 crux claims in `dossier_id` as of `as_of`, highest
+    /// score first, then ordered by id.
     ///
     /// # Errors
     /// Returns [`StoreError::Db`] if the query fails, or
     /// [`StoreError::RowShape`] if a row does not match the expected shape.
-    pub fn cruxes(&self, dossier_id: &str) -> Result<Vec<CruxRow>, StoreError> {
-        let rows = self.run(schema::CRUXES, dossier_param(dossier_id))?;
+    pub fn cruxes(&self, dossier_id: &str, as_of: &str) -> Result<Vec<CruxRow>, StoreError> {
+        let rows = self.run(schema::CRUXES, dossier_param(dossier_id, as_of))?;
         rows.rows
             .iter()
             .map(|row| {
@@ -465,15 +655,19 @@ impl GraphStore {
             .collect()
     }
 
-    /// Returns claims in `dossier_id` with at least 2 distinct supporting
-    /// sources and zero contradictions, most-sourced first, then ordered
-    /// by id.
+    /// Returns claims in `dossier_id` as of `as_of` with at least 2
+    /// distinct supporting sources and zero contradictions, most-sourced
+    /// first, then ordered by id.
     ///
     /// # Errors
     /// Returns [`StoreError::Db`] if the query fails, or
     /// [`StoreError::RowShape`] if a row does not match the expected shape.
-    pub fn consensus(&self, dossier_id: &str) -> Result<Vec<ConsensusRow>, StoreError> {
-        let rows = self.run(schema::CONSENSUS, dossier_param(dossier_id))?;
+    pub fn consensus(
+        &self,
+        dossier_id: &str,
+        as_of: &str,
+    ) -> Result<Vec<ConsensusRow>, StoreError> {
+        let rows = self.run(schema::CONSENSUS, dossier_param(dossier_id, as_of))?;
         rows.rows
             .iter()
             .map(|row| {
@@ -486,14 +680,18 @@ impl GraphStore {
             .collect()
     }
 
-    /// Returns every temporal relation in `dossier_id`, ordered by before
-    /// then after.
+    /// Returns every temporal relation in `dossier_id` as of `as_of`,
+    /// ordered by before then after.
     ///
     /// # Errors
     /// Returns [`StoreError::Db`] if the query fails, or
     /// [`StoreError::RowShape`] if a row does not match the expected shape.
-    pub fn temporal_relations(&self, dossier_id: &str) -> Result<Vec<TemporalRow>, StoreError> {
-        let rows = self.run(schema::TEMPORAL_RELATIONS, dossier_param(dossier_id))?;
+    pub fn temporal_relations(
+        &self,
+        dossier_id: &str,
+        as_of: &str,
+    ) -> Result<Vec<TemporalRow>, StoreError> {
+        let rows = self.run(schema::TEMPORAL_RELATIONS, dossier_param(dossier_id, as_of))?;
         rows.rows
             .iter()
             .map(|row| {
@@ -507,7 +705,9 @@ impl GraphStore {
     }
 
     /// Returns the 8 evidence rows globally nearest to `query_text`'s
-    /// embedding, nearest first, then ordered by id.
+    /// embedding as of `as_of`, nearest first, then ordered by id. See
+    /// [`schema::SIMILAR_EVIDENCE`] for why this stays leak-free under
+    /// `as_of` despite the HNSW index itself carrying no history.
     ///
     /// # Errors
     /// Returns [`StoreError::Db`] if the query fails, or
@@ -515,8 +715,9 @@ impl GraphStore {
     pub fn similar_evidence(
         &self,
         query_text: &str,
+        as_of: &str,
     ) -> Result<Vec<SimilarEvidenceRow>, StoreError> {
-        let rows = self.run(schema::SIMILAR_EVIDENCE, query_param(query_text))?;
+        let rows = self.run(schema::SIMILAR_EVIDENCE, query_param(query_text, as_of))?;
         rows.rows
             .iter()
             .map(|row| {
@@ -534,14 +735,19 @@ impl GraphStore {
             .collect()
     }
 
-    /// Returns the 5 claims globally nearest to `query_text`'s embedding,
-    /// nearest first, then ordered by id.
+    /// Returns the 5 claims globally nearest to `query_text`'s embedding as
+    /// of `as_of`, nearest first, then ordered by id. See
+    /// [`schema::SIMILAR_CLAIMS`] for the same leak-free reasoning.
     ///
     /// # Errors
     /// Returns [`StoreError::Db`] if the query fails, or
     /// [`StoreError::RowShape`] if a row does not match the expected shape.
-    pub fn similar_claims(&self, query_text: &str) -> Result<Vec<SimilarClaimRow>, StoreError> {
-        let rows = self.run(schema::SIMILAR_CLAIMS, query_param(query_text))?;
+    pub fn similar_claims(
+        &self,
+        query_text: &str,
+        as_of: &str,
+    ) -> Result<Vec<SimilarClaimRow>, StoreError> {
+        let rows = self.run(schema::SIMILAR_CLAIMS, query_param(query_text, as_of))?;
         rows.rows
             .iter()
             .map(|row| {
@@ -554,20 +760,553 @@ impl GraphStore {
             .collect()
     }
 
-    /// Returns the research question for `dossier_id`, or `None` if no
-    /// dossier with that id has been ingested.
+    /// Returns `(question, created_at)` for `dossier_id` as of `as_of`, or
+    /// `None` if that dossier did not exist yet as of `as_of` (either it
+    /// has never been ingested, or `as_of` predates its first ingest).
     ///
     /// # Errors
     /// Returns [`StoreError::Db`] if the query fails, or
     /// [`StoreError::RowShape`] if the row does not match the expected
     /// shape.
-    pub fn dossier_question(&self, dossier_id: &str) -> Result<Option<String>, StoreError> {
-        const QUERY: &str = "?[question] := *dossier{id: $dossier_id, question}";
-        let rows = self.run(QUERY, dossier_param(dossier_id))?;
+    pub fn dossier_meta(
+        &self,
+        dossier_id: &str,
+        as_of: &str,
+    ) -> Result<Option<(String, String)>, StoreError> {
+        const QUERY: &str = r#"
+?[question, created_at] := *dossier{id: $dossier_id, question, created_at}
+:as_of $as_of
+"#;
+        let rows = self.run(QUERY, dossier_param(dossier_id, as_of))?;
         match rows.rows.first() {
-            Some(row) => Ok(Some(str_at(row, 0, "dossier_question")?)),
+            Some(row) => Ok(Some((
+                str_at(row, 0, "dossier_meta")?,
+                str_at(row, 1, "dossier_meta")?,
+            ))),
             None => Ok(None),
         }
+    }
+
+    /// Returns every dossier's `(id, created_at)` globally as of `as_of`.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Db`] if the query fails, or
+    /// [`StoreError::RowShape`] if a row does not match the expected shape.
+    pub fn all_dossiers(&self, as_of: &str) -> Result<Vec<DossierRow>, StoreError> {
+        let rows = self.run(schema::ALL_DOSSIERS, as_of_param(as_of))?;
+        rows.rows
+            .iter()
+            .map(|row| {
+                Ok(DossierRow {
+                    id: str_at(row, 0, "all_dossiers")?,
+                    created_at: str_at(row, 1, "all_dossiers")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Returns every `(dossier_id, question_id)` tag globally as of
+    /// `as_of`.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Db`] if the query fails, or
+    /// [`StoreError::RowShape`] if a row does not match the expected shape.
+    pub fn all_dossier_questions(&self, as_of: &str) -> Result<Vec<(String, String)>, StoreError> {
+        let rows = self.run(schema::ALL_DOSSIER_QUESTIONS, as_of_param(as_of))?;
+        rows.rows
+            .iter()
+            .map(|row| {
+                Ok((
+                    str_at(row, 0, "all_dossier_questions")?,
+                    str_at(row, 1, "all_dossier_questions")?,
+                ))
+            })
+            .collect()
+    }
+
+    /// Returns every family-routing tag globally as of `as_of`.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Db`] if the query fails, or
+    /// [`StoreError::RowShape`] if a row does not match the expected shape.
+    pub fn all_question_families(&self, as_of: &str) -> Result<Vec<QuestionFamilyRow>, StoreError> {
+        let rows = self.run(schema::ALL_QUESTION_FAMILIES, as_of_param(as_of))?;
+        rows.rows
+            .iter()
+            .map(|row| {
+                Ok(QuestionFamilyRow {
+                    question_id: str_at(row, 0, "all_question_families")?,
+                    family_id: str_at(row, 1, "all_question_families")?,
+                    probability: opt_float_at(row, 2, "all_question_families")?,
+                    method: str_at(row, 3, "all_question_families")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Returns every family globally as of `as_of`, live and merged-away
+    /// alike.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Db`] if the query fails, or
+    /// [`StoreError::RowShape`] if a row does not match the expected shape.
+    pub fn all_families(&self, as_of: &str) -> Result<Vec<FamilyRow>, StoreError> {
+        let rows = self.run(schema::ALL_FAMILIES, as_of_param(as_of))?;
+        rows.rows
+            .iter()
+            .map(|row| {
+                Ok(FamilyRow {
+                    id: str_at(row, 0, "all_families")?,
+                    label: str_at(row, 1, "all_families")?,
+                    description: str_at(row, 2, "all_families")?,
+                    created_at: str_at(row, 3, "all_families")?,
+                    merged_into: opt_str_at(row, 4, "all_families")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Returns every `(family_id, last_seen)` pair globally as of `as_of`.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Db`] if the query fails, or
+    /// [`StoreError::RowShape`] if a row does not match the expected shape.
+    pub fn all_family_seen(&self, as_of: &str) -> Result<Vec<(String, String)>, StoreError> {
+        let rows = self.run(schema::ALL_FAMILY_SEEN, as_of_param(as_of))?;
+        rows.rows
+            .iter()
+            .map(|row| {
+                Ok((
+                    str_at(row, 0, "all_family_seen")?,
+                    str_at(row, 1, "all_family_seen")?,
+                ))
+            })
+            .collect()
+    }
+
+    /// Returns every history item globally as of `as_of`.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Db`] if the query fails, or
+    /// [`StoreError::RowShape`] if a row does not match the expected shape.
+    pub fn all_history(&self, as_of: &str) -> Result<Vec<HistoryItem>, StoreError> {
+        let rows = self.run(schema::ALL_HISTORY, as_of_param(as_of))?;
+        rows.rows
+            .iter()
+            .map(|row| {
+                Ok(HistoryItem {
+                    id: str_at(row, 0, "all_history")?,
+                    kind: str_at(row, 1, "all_history")?,
+                    title: str_at(row, 2, "all_history")?,
+                    url: str_at(row, 3, "all_history")?,
+                    question_type: str_at(row, 4, "all_history")?,
+                    forecast: json_at(row, 5, "all_history")?,
+                    resolution: opt_str_at(row, 6, "all_history")?,
+                    resolved_at: opt_str_at(row, 7, "all_history")?,
+                    family_id: opt_str_at(row, 8, "all_history")?,
+                    note: str_at(row, 9, "all_history")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Resolves `family_id` forward through `merged_into` chains to the
+    /// live (root) family, as reflected by `families`. Caps at 20 hops
+    /// (generous for any real merge chain) and stops early on a cycle,
+    /// returning the id at which the cycle was detected rather than
+    /// looping forever; a merge cycle is a data-integrity bug elsewhere,
+    /// not a case this method silently accepts.
+    pub fn resolve_family_id(families: &[FamilyRow], family_id: &str) -> String {
+        let by_id: HashMap<&str, &FamilyRow> =
+            families.iter().map(|f| (f.id.as_str(), f)).collect();
+        let mut current = family_id.to_string();
+        let mut seen = HashSet::new();
+        for _ in 0..20 {
+            if !seen.insert(current.clone()) {
+                break;
+            }
+            match by_id
+                .get(current.as_str())
+                .and_then(|f| f.merged_into.as_deref())
+            {
+                Some(next) => current = next.to_string(),
+                None => break,
+            }
+        }
+        current
+    }
+
+    /// Mints a fresh family id for `label`: `fam:<slug(label)>`, suffixed
+    /// `-2`, `-3`, ... on collision with an existing id (checked against
+    /// current state).
+    ///
+    /// # Errors
+    /// Returns [`StoreError::FamilyIdExhausted`] if no unused id was found
+    /// within 1000 attempts (a data-integrity red flag, not a normal
+    /// outcome at this system's scale), or [`StoreError::Db`]/
+    /// [`StoreError::RowShape`] if the existence check fails.
+    pub fn mint_family_id(&self, label: &str) -> Result<String, StoreError> {
+        let existing = self.all_families(AS_OF_NOW)?;
+        let existing_ids: HashSet<&str> = existing.iter().map(|f| f.id.as_str()).collect();
+        let base = format!("fam:{}", crate::model::slugify(label));
+        if !existing_ids.contains(base.as_str()) {
+            return Ok(base);
+        }
+        for n in 2..1000u32 {
+            let candidate = format!("{base}-{n}");
+            if !existing_ids.contains(candidate.as_str()) {
+                return Ok(candidate);
+            }
+        }
+        Err(StoreError::FamilyIdExhausted {
+            label: label.to_string(),
+            attempts: 1000,
+        })
+    }
+
+    /// Inserts a new family row (current state; the row has no prior
+    /// version).
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Db`] if the write fails.
+    pub fn insert_family(
+        &self,
+        id: &str,
+        label: &str,
+        description: &str,
+        created_at: &str,
+    ) -> Result<(), StoreError> {
+        const QUERY: &str = r#"
+?[id, label, description, created_at, merged_into] <- $rows
+:put family {id => label, description, created_at, merged_into}
+"#;
+        let mut params = BTreeMap::new();
+        params.insert(
+            "rows".to_string(),
+            DataValue::List(vec![DataValue::List(vec![
+                DataValue::from(id),
+                DataValue::from(label),
+                DataValue::from(description),
+                DataValue::from(created_at),
+                DataValue::Null,
+            ])]),
+        );
+        self.run_mut(QUERY, params)?;
+        Ok(())
+    }
+
+    /// Sets `absorbed_id`'s `merged_into` to `into_id` (a new `family`
+    /// version; `label`/`description`/`created_at` are carried over
+    /// unchanged from the absorbed family's current state, since `:put`
+    /// replaces the whole row rather than patching one column). Per
+    /// `docs/contracts.md` §C4/spec s2, this is prospective only: existing
+    /// `question_family` tags referencing `absorbed_id` are left as-is and
+    /// are resolved forward at read time via [`Self::resolve_family_id`].
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Db`]/[`StoreError::RowShape`] if reading the
+    /// absorbed family fails, or a [`StoreError`] from a plain
+    /// `StoreError::Db("family not found: ...")` if `absorbed_id` does not
+    /// currently exist.
+    pub fn merge_family(&self, absorbed_id: &str, into_id: &str) -> Result<(), StoreError> {
+        let existing = self.all_families(AS_OF_NOW)?;
+        let absorbed = existing
+            .iter()
+            .find(|f| f.id == absorbed_id)
+            .ok_or_else(|| StoreError::Db(format!("family not found: {absorbed_id}")))?;
+
+        const QUERY: &str = r#"
+?[id, label, description, created_at, merged_into] <- $rows
+:put family {id => label, description, created_at, merged_into}
+"#;
+        let mut params = BTreeMap::new();
+        params.insert(
+            "rows".to_string(),
+            DataValue::List(vec![DataValue::List(vec![
+                DataValue::from(absorbed.id.as_str()),
+                DataValue::from(absorbed.label.as_str()),
+                DataValue::from(absorbed.description.as_str()),
+                DataValue::from(absorbed.created_at.as_str()),
+                DataValue::from(into_id),
+            ])]),
+        );
+        self.run_mut(QUERY, params)?;
+        Ok(())
+    }
+
+    /// Records `last_seen` for `family_id` (a new `family_seen` version).
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Db`] if the write fails.
+    pub fn record_family_seen(&self, family_id: &str, last_seen: &str) -> Result<(), StoreError> {
+        const QUERY: &str = r#"
+?[family_id, last_seen] <- $rows
+:put family_seen {family_id => last_seen}
+"#;
+        let mut params = BTreeMap::new();
+        params.insert(
+            "rows".to_string(),
+            DataValue::List(vec![DataValue::List(vec![
+                DataValue::from(family_id),
+                DataValue::from(last_seen),
+            ])]),
+        );
+        self.run_mut(QUERY, params)?;
+        Ok(())
+    }
+
+    /// Records a `question_family` routing tag (a new version; prior tags
+    /// for the same `question_id` remain reachable via `:as_of`).
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Db`] if the write fails.
+    pub fn record_question_family(
+        &self,
+        question_id: &str,
+        family_id: &str,
+        probability: Option<f64>,
+        method: &str,
+        question: &str,
+    ) -> Result<(), StoreError> {
+        const QUERY: &str = r#"
+?[question_id, family_id, probability, method, question] <- $rows
+:put question_family {question_id => family_id, probability, method, question}
+"#;
+        let mut params = BTreeMap::new();
+        params.insert(
+            "rows".to_string(),
+            DataValue::List(vec![DataValue::List(vec![
+                DataValue::from(question_id),
+                DataValue::from(family_id),
+                opt_float(probability),
+                DataValue::from(method),
+                DataValue::from(question),
+            ])]),
+        );
+        self.run_mut(QUERY, params)?;
+        Ok(())
+    }
+
+    /// Upserts every item in `items` (each a new `history_item` version).
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Db`] if the write fails.
+    pub fn upsert_history(&self, items: &[HistoryItem]) -> Result<(), StoreError> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        const QUERY: &str = r#"
+?[id, kind, title, url, question_type, forecast, resolution, resolved_at, family_id, note]
+  <- $rows
+:put history_item {id => kind, title, url, question_type, forecast, resolution, resolved_at,
+  family_id, note}
+"#;
+        let rows = items
+            .iter()
+            .map(|item| {
+                DataValue::List(vec![
+                    DataValue::from(item.id.as_str()),
+                    DataValue::from(item.kind.as_str()),
+                    DataValue::from(item.title.as_str()),
+                    DataValue::from(item.url.as_str()),
+                    DataValue::from(item.question_type.as_str()),
+                    DataValue::from(item.forecast.clone()),
+                    opt_str(item.resolution.as_deref()),
+                    opt_str(item.resolved_at.as_deref()),
+                    opt_str(item.family_id.as_deref()),
+                    DataValue::from(item.note.as_str()),
+                ])
+            })
+            .collect();
+        let mut params = BTreeMap::new();
+        params.insert("rows".to_string(), DataValue::List(rows));
+        self.run_mut(QUERY, params)?;
+        Ok(())
+    }
+
+    /// Ingests `documents` without extraction (bot outbox replay / degraded
+    /// mode, `docs/contracts.md` §C4): computes each document's
+    /// content-addressed id and hash and writes `source` + `blob` rows.
+    /// Returns the number of documents ingested.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Db`] if the write fails.
+    pub fn ingest_raw_documents(&self, documents: &[RawDocument]) -> Result<usize, StoreError> {
+        if documents.is_empty() {
+            return Ok(0);
+        }
+        const QUERY: &str = r#"
+{ ?[id, title, url, provider, published, retrieved_at, content_hash] <- $sources
+  :put source {id => title, url, provider, published, retrieved_at, content_hash} }
+{ ?[content_hash, content] <- $blobs
+  :put blob {content_hash => content} }
+"#;
+        let mut sources = Vec::with_capacity(documents.len());
+        let mut blobs = Vec::with_capacity(documents.len());
+        let mut seen_hashes = HashSet::new();
+        for document in documents {
+            let content_hash = sha256_hex(&document.content);
+            let url_hash = &sha256_hex(&document.url)[..16];
+            let id = format!("src:{}:{url_hash}", document.provider);
+            sources.push(DataValue::List(vec![
+                DataValue::from(id.as_str()),
+                DataValue::from(document.title.as_str()),
+                DataValue::from(document.url.as_str()),
+                DataValue::from(document.provider.as_str()),
+                DataValue::from(document.published.as_str()),
+                DataValue::from(document.fetched_at.as_str()),
+                DataValue::from(content_hash.as_str()),
+            ]));
+            if seen_hashes.insert(content_hash.clone()) {
+                blobs.push(DataValue::List(vec![
+                    DataValue::from(content_hash.as_str()),
+                    DataValue::from(document.content.as_str()),
+                ]));
+            }
+        }
+        let mut params = BTreeMap::new();
+        params.insert("sources".to_string(), DataValue::List(sources));
+        params.insert("blobs".to_string(), DataValue::List(blobs));
+        self.db
+            .run_script(QUERY, params, ScriptMutability::Mutable)
+            .map_err(db_error)?;
+        Ok(documents.len())
+    }
+
+    /// Returns the dossier ids whose tagged question resolves (through
+    /// `merged_into` chains) to `canonical_family_id`, as of `as_of`,
+    /// newest dossier first (`docs/contracts.md` §C2 "newest first").
+    ///
+    /// # Errors
+    /// Returns [`StoreError`] if any underlying query fails.
+    pub fn dossiers_for_family(
+        &self,
+        canonical_family_id: &str,
+        as_of: &str,
+    ) -> Result<Vec<String>, StoreError> {
+        let families = self.all_families(as_of)?;
+        let question_families = self.all_question_families(as_of)?;
+        let dossier_questions = self.all_dossier_questions(as_of)?;
+        let dossiers = self.all_dossiers(as_of)?;
+
+        let matching_questions: HashSet<&str> = question_families
+            .iter()
+            .filter(|tag| Self::resolve_family_id(&families, &tag.family_id) == canonical_family_id)
+            .map(|tag| tag.question_id.as_str())
+            .collect();
+
+        let mut matching_dossiers: HashSet<String> = dossier_questions
+            .iter()
+            .filter(|(_, question_id)| matching_questions.contains(question_id.as_str()))
+            .map(|(dossier_id, _)| dossier_id.clone())
+            .collect();
+
+        let created_at: HashMap<&str, &str> = dossiers
+            .iter()
+            .map(|d| (d.id.as_str(), d.created_at.as_str()))
+            .collect();
+        let mut ordered: Vec<String> = matching_dossiers.drain().collect();
+        ordered.sort_by(|a, b| {
+            let a_time = created_at.get(a.as_str()).copied().unwrap_or("");
+            let b_time = created_at.get(b.as_str()).copied().unwrap_or("");
+            b_time.cmp(a_time).then_with(|| a.cmp(b))
+        });
+        Ok(ordered)
+    }
+
+    /// Builds this dossier's claims as [`ClaimView`]s as of `as_of`,
+    /// ordered by support descending (nulls last), ties broken by claim id
+    /// (`docs/contracts.md` §C2 `claims`).
+    ///
+    /// # Errors
+    /// Returns [`StoreError`] if any underlying query fails.
+    pub fn claim_views(&self, dossier_id: &str, as_of: &str) -> Result<Vec<ClaimView>, StoreError> {
+        let claims = self.claims_with_stance(dossier_id, as_of)?;
+        let support = self.claim_support(dossier_id, as_of)?;
+        let evidence = self.evidence(dossier_id, as_of)?;
+        let sources = self.sources(dossier_id, as_of)?;
+        Ok(build_claim_views(
+            dossier_id, &claims, &support, &evidence, &sources,
+        ))
+    }
+
+    /// Builds [`ClaimView`]s across `dossier_ids` (already ordered by the
+    /// caller, e.g. newest dossier first) as of `as_of`, concatenating each
+    /// dossier's own support-ranked claims in that dossier order and
+    /// truncating to `limit` (`docs/contracts.md` §C2 `family_claims`).
+    ///
+    /// # Errors
+    /// Returns [`StoreError`] if any underlying query fails.
+    pub fn claim_views_for_dossiers(
+        &self,
+        dossier_ids: &[String],
+        as_of: &str,
+        limit: usize,
+    ) -> Result<Vec<ClaimView>, StoreError> {
+        let mut out = Vec::new();
+        for dossier_id in dossier_ids {
+            if out.len() >= limit {
+                break;
+            }
+            out.extend(self.claim_views(dossier_id, as_of)?);
+        }
+        out.truncate(limit);
+        Ok(out)
+    }
+
+    /// Returns documents as of `as_of`, optionally filtered to those
+    /// belonging to a dossier tagged (through merge chains) to
+    /// `family_id`, ordered by provider then title, capped at `limit`
+    /// (`docs/contracts.md` §C3 `GET /api/documents`).
+    ///
+    /// # Errors
+    /// Returns [`StoreError`] if any underlying query fails.
+    pub fn documents(
+        &self,
+        as_of: &str,
+        family_id: Option<&str>,
+        limit: usize,
+        include_content: bool,
+    ) -> Result<Vec<DocumentRow>, StoreError> {
+        let sources = match family_id {
+            None => self.all_sources(as_of, limit)?,
+            Some(family_id) => {
+                let families = self.all_families(as_of)?;
+                let canonical = Self::resolve_family_id(&families, family_id);
+                let dossier_ids = self.dossiers_for_family(&canonical, as_of)?;
+                let mut by_id: BTreeMap<String, SourceRow> = BTreeMap::new();
+                for dossier_id in &dossier_ids {
+                    for source in self.sources(dossier_id, as_of)? {
+                        by_id.entry(source.id.clone()).or_insert(source);
+                    }
+                }
+                let mut merged: Vec<SourceRow> = by_id.into_values().collect();
+                merged.sort_by(|a, b| (&a.provider, &a.title).cmp(&(&b.provider, &b.title)));
+                merged.truncate(limit);
+                merged
+            }
+        };
+
+        sources
+            .into_iter()
+            .map(|source| {
+                let content = if include_content {
+                    self.blob_content(&source.content_hash)?
+                } else {
+                    None
+                };
+                Ok(DocumentRow {
+                    source_id: source.id,
+                    url: source.url,
+                    title: source.title,
+                    provider: source.provider,
+                    published: source.published,
+                    fetched_at: source.retrieved_at,
+                    content_hash: source.content_hash,
+                    content,
+                })
+            })
+            .collect()
     }
 
     /// Runs `query` as an immutable (read-only) script against this
@@ -584,6 +1323,20 @@ impl GraphStore {
             .run_script(query, params, ScriptMutability::Immutable)
             .map_err(db_error)
     }
+
+    /// Runs `query` as a mutable (write) script against this database.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::Db`] if mnestic fails to run the script.
+    fn run_mut(
+        &self,
+        query: &'static str,
+        params: BTreeMap<String, DataValue>,
+    ) -> Result<NamedRows, StoreError> {
+        self.db
+            .run_script(query, params, ScriptMutability::Mutable)
+            .map_err(db_error)
+    }
 }
 
 /// Converts a mnestic `miette::Report` into a [`StoreError::Db`].
@@ -591,18 +1344,25 @@ fn db_error(err: impl std::fmt::Debug) -> StoreError {
     StoreError::Db(format!("{err:?}"))
 }
 
-/// Builds the `$dossier_id` parameter map shared by every dossier-scoped
-/// query.
-fn dossier_param(dossier_id: &str) -> BTreeMap<String, DataValue> {
-    let mut params = BTreeMap::new();
+/// Builds the `$dossier_id`/`$as_of` parameter map shared by every
+/// dossier-scoped query.
+fn dossier_param(dossier_id: &str, as_of: &str) -> BTreeMap<String, DataValue> {
+    let mut params = as_of_param(as_of);
     params.insert("dossier_id".to_string(), DataValue::from(dossier_id));
     params
 }
 
-/// Builds the `$q` parameter map shared by both vector-similarity queries:
-/// the 256-dimensional embedding of `query_text`.
-fn query_param(query_text: &str) -> BTreeMap<String, DataValue> {
+/// Builds the `$as_of` parameter map shared by every as-of-aware query.
+fn as_of_param(as_of: &str) -> BTreeMap<String, DataValue> {
     let mut params = BTreeMap::new();
+    params.insert("as_of".to_string(), DataValue::from(as_of));
+    params
+}
+
+/// Builds the `$q`/`$as_of` parameter map shared by both vector-similarity
+/// queries: the 256-dimensional embedding of `query_text`.
+fn query_param(query_text: &str, as_of: &str) -> BTreeMap<String, DataValue> {
+    let mut params = as_of_param(as_of);
     params.insert("q".to_string(), embedding_list(&embed(query_text)));
     params
 }
@@ -618,11 +1378,105 @@ fn embedding_list(embedding: &[f32]) -> DataValue {
     )
 }
 
-/// Builds the full `$dossier`, `$dossier_items`, `$entities`, ...
-/// parameter map for [`schema::INGEST_SCRIPT`] from `payload`.
+/// Converts an `Option<f64>` into the `DataValue` mnestic expects for a
+/// nullable `Float?` column: `DataValue::Null` for `None`.
+fn opt_float(value: Option<f64>) -> DataValue {
+    match value {
+        Some(v) => DataValue::from(v),
+        None => DataValue::Null,
+    }
+}
+
+/// Converts an `Option<&str>` into the `DataValue` mnestic expects for a
+/// nullable `String?` column.
+fn opt_str(value: Option<&str>) -> DataValue {
+    match value {
+        Some(v) => DataValue::from(v),
+        None => DataValue::Null,
+    }
+}
+
+/// Parses a `SourceRow` from a 7-column `(id, title, url, provider,
+/// published, retrieved_at, content_hash)` row.
+fn source_row(row: &[DataValue], query: &'static str) -> Result<SourceRow, StoreError> {
+    Ok(SourceRow {
+        id: str_at(row, 0, query)?,
+        title: str_at(row, 1, query)?,
+        url: str_at(row, 2, query)?,
+        provider: str_at(row, 3, query)?,
+        published: str_at(row, 4, query)?,
+        retrieved_at: str_at(row, 5, query)?,
+        content_hash: str_at(row, 6, query)?,
+    })
+}
+
+/// Joins already-fetched dossier-scoped rows into [`ClaimView`]s, ordered
+/// by support descending (nulls last), ties broken by claim id.
+fn build_claim_views(
+    dossier_id: &str,
+    claims: &[ClaimStanceRow],
+    support: &[ClaimSupportRow],
+    evidence: &[EvidenceRow],
+    sources: &[SourceRow],
+) -> Vec<ClaimView> {
+    let support_by_claim: HashMap<&str, &ClaimSupportRow> =
+        support.iter().map(|s| (s.claim_id.as_str(), s)).collect();
+    let sources_by_id: HashMap<&str, &SourceRow> =
+        sources.iter().map(|s| (s.id.as_str(), s)).collect();
+
+    let mut views: Vec<ClaimView> = claims
+        .iter()
+        .map(|claim| {
+            let claim_support = support_by_claim.get(claim.id.as_str());
+            let claim_evidence: Vec<ClaimEvidenceView> = evidence
+                .iter()
+                .filter(|e| e.claim_id == claim.id)
+                .map(|e| {
+                    let source = sources_by_id.get(e.source_id.as_str());
+                    ClaimEvidenceView {
+                        source_id: e.source_id.clone(),
+                        title: source.map_or_else(String::new, |s| s.title.clone()),
+                        url: source.map_or_else(String::new, |s| s.url.clone()),
+                        provider: source.map_or_else(String::new, |s| s.provider.clone()),
+                        published: source.map_or_else(String::new, |s| s.published.clone()),
+                        fetched_at: source.map_or_else(String::new, |s| s.retrieved_at.clone()),
+                        content_hash: source.map_or_else(String::new, |s| s.content_hash.clone()),
+                        stance: e.stance.clone(),
+                        excerpt: e.excerpt.clone(),
+                    }
+                })
+                .collect();
+            ClaimView {
+                claim_id: claim.id.clone(),
+                text: claim.text.clone(),
+                kind: claim.kind.clone(),
+                support: claim_support.and_then(|s| s.support),
+                support_method: claim_support
+                    .map_or_else(|| "none".to_string(), |s| s.method.clone()),
+                dossier_id: dossier_id.to_string(),
+                evidence: claim_evidence,
+            }
+        })
+        .collect();
+
+    views.sort_by(|a, b| {
+        match (a.support, b.support) {
+            (Some(x), Some(y)) => y.partial_cmp(&x).unwrap_or(std::cmp::Ordering::Equal),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+        .then_with(|| a.claim_id.cmp(&b.claim_id))
+    });
+    views
+}
+
+/// Builds the full ingestion parameter map for [`schema::INGEST_SCRIPT`]
+/// from `payload`.
 fn ingest_params(
     payload: &ExtractionPayload,
     dossier_id: &str,
+    question_id: Option<&str>,
     created_at: &str,
 ) -> BTreeMap<String, DataValue> {
     let mut params = BTreeMap::new();
@@ -634,6 +1488,17 @@ fn ingest_params(
             DataValue::from(payload.question.as_str()),
             DataValue::from(created_at),
         ])]),
+    );
+
+    params.insert(
+        "dossier_questions".to_string(),
+        DataValue::List(match question_id {
+            Some(question_id) => vec![DataValue::List(vec![
+                DataValue::from(dossier_id),
+                DataValue::from(question_id),
+            ])],
+            None => vec![],
+        }),
     );
 
     params.insert(
@@ -721,6 +1586,25 @@ fn ingest_params(
                         DataValue::from(source.provider.as_str()),
                         DataValue::from(source.published.as_str()),
                         DataValue::from(source.retrieved_at.as_str()),
+                        DataValue::from(source.content_hash.as_str()),
+                    ])
+                })
+                .collect(),
+        ),
+    );
+
+    let mut seen_blob_hashes = HashSet::new();
+    params.insert(
+        "blobs".to_string(),
+        DataValue::List(
+            payload
+                .sources
+                .iter()
+                .filter(|source| seen_blob_hashes.insert(source.content_hash.clone()))
+                .map(|source| {
+                    DataValue::List(vec![
+                        DataValue::from(source.content_hash.as_str()),
+                        DataValue::from(source.content.as_str()),
                     ])
                 })
                 .collect(),
@@ -738,6 +1622,21 @@ fn ingest_params(
                         DataValue::from(claim.id.as_str()),
                         DataValue::from(claim.text.as_str()),
                         DataValue::from(claim.kind.as_str()),
+                    ])
+                })
+                .collect(),
+        ),
+    );
+
+    params.insert(
+        "claim_vecs".to_string(),
+        DataValue::List(
+            payload
+                .claims
+                .iter()
+                .map(|claim| {
+                    DataValue::List(vec![
+                        DataValue::from(claim.id.as_str()),
                         embedding_list(&embed(&claim.text)),
                     ])
                 })
@@ -778,6 +1677,21 @@ fn ingest_params(
                         DataValue::from(evidence.stance.as_str()),
                         DataValue::from(evidence.excerpt.as_str()),
                         DataValue::from(evidence.quality),
+                    ])
+                })
+                .collect(),
+        ),
+    );
+
+    params.insert(
+        "evidence_vecs".to_string(),
+        DataValue::List(
+            payload
+                .evidence
+                .iter()
+                .map(|evidence| {
+                    DataValue::List(vec![
+                        DataValue::from(evidence.id.as_str()),
                         embedding_list(&embed(&evidence.excerpt)),
                     ])
                 })
@@ -822,6 +1736,24 @@ fn ingest_params(
         ),
     );
 
+    params.insert(
+        "claim_supports".to_string(),
+        DataValue::List(
+            payload
+                .claims
+                .iter()
+                .map(|claim| {
+                    DataValue::List(vec![
+                        DataValue::from(dossier_id),
+                        DataValue::from(claim.id.as_str()),
+                        opt_float(claim.support),
+                        DataValue::from(claim.support_method.as_str()),
+                    ])
+                })
+                .collect(),
+        ),
+    );
+
     params
 }
 
@@ -838,6 +1770,34 @@ fn str_at(row: &[DataValue], idx: usize, query: &'static str) -> Result<String, 
             query,
             detail: format!("expected string at column {idx}, row: {row:?}"),
         })
+}
+
+/// Reads an `Option<String>` from `row[idx]`: `None` for a null cell.
+///
+/// # Errors
+/// Returns [`StoreError::RowShape`] if the column is missing or is neither
+/// null nor a string.
+fn opt_str_at(
+    row: &[DataValue],
+    idx: usize,
+    query: &'static str,
+) -> Result<Option<String>, StoreError> {
+    match row.get(idx) {
+        Some(DataValue::Null) => Ok(None),
+        Some(other) => {
+            other
+                .get_str()
+                .map(|s| Some(s.to_string()))
+                .ok_or_else(|| StoreError::RowShape {
+                    query,
+                    detail: format!("expected nullable string at column {idx}, row: {row:?}"),
+                })
+        }
+        None => Err(StoreError::RowShape {
+            query,
+            detail: format!("missing column {idx}, row: {row:?}"),
+        }),
+    }
 }
 
 /// Reads an `i64` from `row[idx]`.
@@ -865,6 +1825,49 @@ fn float_at(row: &[DataValue], idx: usize, query: &'static str) -> Result<f64, S
         .ok_or_else(|| StoreError::RowShape {
             query,
             detail: format!("expected float at column {idx}, row: {row:?}"),
+        })
+}
+
+/// Reads an `Option<f64>` from `row[idx]`: `None` for a null cell.
+///
+/// # Errors
+/// Returns [`StoreError::RowShape`] if the column is missing or is neither
+/// null nor a number.
+fn opt_float_at(
+    row: &[DataValue],
+    idx: usize,
+    query: &'static str,
+) -> Result<Option<f64>, StoreError> {
+    match row.get(idx) {
+        Some(DataValue::Null) => Ok(None),
+        Some(other) => other
+            .get_float()
+            .map(Some)
+            .ok_or_else(|| StoreError::RowShape {
+                query,
+                detail: format!("expected nullable float at column {idx}, row: {row:?}"),
+            }),
+        None => Err(StoreError::RowShape {
+            query,
+            detail: format!("missing column {idx}, row: {row:?}"),
+        }),
+    }
+}
+
+/// Reads a `serde_json::Value` from the `Json`-typed `row[idx]`.
+///
+/// # Errors
+/// Returns [`StoreError::RowShape`] if the column is missing.
+fn json_at(
+    row: &[DataValue],
+    idx: usize,
+    query: &'static str,
+) -> Result<serde_json::Value, StoreError> {
+    row.get(idx)
+        .map(Into::into)
+        .ok_or_else(|| StoreError::RowShape {
+            query,
+            detail: format!("missing column {idx}, row: {row:?}"),
         })
 }
 
@@ -902,11 +1905,21 @@ fn str_list_at(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::ExtractionPayload;
+    use crate::model::{
+        CausalLink, Claim, Entity, Evidence, ExtractionPayload, HistoryItem, Source,
+    };
 
     const FIXTURE: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/fixtures/payload/semiconductor.json"
+        "/fixtures/rust/semiconductor_v2.json"
+    ));
+    /// Same dossier (same question, hence same `dossier_id`) as [`FIXTURE`],
+    /// with exactly one source's `content`/`content_hash` changed, as if
+    /// that page had been edited and the question re-researched. Used to
+    /// prove the as-of/versioning behavior (`docs/contracts.md` decision 2).
+    const FIXTURE_UPDATED: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/rust/semiconductor_v2_updated.json"
     ));
     const CREATED_AT: &str = "2026-09-14T00:00:00Z";
 
@@ -914,11 +1927,31 @@ mod tests {
         serde_json::from_str(FIXTURE).expect("fixture payload parses")
     }
 
+    fn fixture_payload_updated() -> ExtractionPayload {
+        serde_json::from_str(FIXTURE_UPDATED).expect("updated fixture payload parses")
+    }
+
+    /// Builds a v2 [`Source`] for `title`/`url` whose id and `content_hash`
+    /// are correctly derived from `content`.
+    fn make_source(provider: &str, title: &str, url: &str, content: &str) -> Source {
+        let url_hash = &sha256_hex(url)[..16];
+        Source {
+            id: format!("src:{provider}:{url_hash}"),
+            title: title.to_string(),
+            url: url.to_string(),
+            provider: provider.to_string(),
+            published: String::new(),
+            retrieved_at: CREATED_AT.to_string(),
+            content_hash: sha256_hex(content),
+            content: content.to_string(),
+        }
+    }
+
     fn small_payload(question: &str, entity_id: &str, entity_name: &str) -> ExtractionPayload {
         ExtractionPayload {
-            schema_version: 1,
+            schema_version: 2,
             question: question.to_string(),
-            entities: vec![crate::model::Entity {
+            entities: vec![Entity {
                 id: entity_id.to_string(),
                 name: entity_name.to_string(),
                 kind: "organization".to_string(),
@@ -930,6 +1963,8 @@ mod tests {
             evidence: vec![],
             causal_links: vec![],
             temporal_relations: vec![],
+            gate_log: vec![],
+            dropped_sources: vec![],
         }
     }
 
@@ -946,7 +1981,9 @@ mod tests {
         let store = GraphStore::open_memory().expect("open store");
         store.init_schema().expect("init schema");
 
-        let report = store.ingest(&payload, CREATED_AT).expect("ingest fixture");
+        let report = store
+            .ingest(&payload, None, CREATED_AT)
+            .expect("ingest fixture");
 
         assert_eq!(report.entities, payload.entities.len());
         assert_eq!(report.events, payload.events.len());
@@ -963,22 +2000,36 @@ mod tests {
         let payload = fixture_payload();
         let store = GraphStore::open_memory().expect("open store");
         store.init_schema().expect("init schema");
-        let report = store.ingest(&payload, CREATED_AT).expect("ingest fixture");
+        let report = store
+            .ingest(&payload, None, CREATED_AT)
+            .expect("ingest fixture");
 
         assert_eq!(
-            store.entities(&report.dossier_id).expect("entities").len(),
+            store
+                .entities(&report.dossier_id, AS_OF_NOW)
+                .expect("entities")
+                .len(),
             payload.entities.len()
         );
         assert_eq!(
-            store.events(&report.dossier_id).expect("events").len(),
+            store
+                .events(&report.dossier_id, AS_OF_NOW)
+                .expect("events")
+                .len(),
             payload.events.len()
         );
         assert_eq!(
-            store.sources(&report.dossier_id).expect("sources").len(),
+            store
+                .sources(&report.dossier_id, AS_OF_NOW)
+                .expect("sources")
+                .len(),
             payload.sources.len()
         );
         assert_eq!(
-            store.evidence(&report.dossier_id).expect("evidence").len(),
+            store
+                .evidence(&report.dossier_id, AS_OF_NOW)
+                .expect("evidence")
+                .len(),
             payload.evidence.len()
         );
     }
@@ -988,10 +2039,12 @@ mod tests {
         let payload = fixture_payload();
         let store = GraphStore::open_memory().expect("open store");
         store.init_schema().expect("init schema");
-        let report = store.ingest(&payload, CREATED_AT).expect("ingest fixture");
+        let report = store
+            .ingest(&payload, None, CREATED_AT)
+            .expect("ingest fixture");
 
         let rows = store
-            .claims_with_stance(&report.dossier_id)
+            .claims_with_stance(&report.dossier_id, AS_OF_NOW)
             .expect("claims_with_stance");
         assert_eq!(rows.len(), payload.claims.len());
 
@@ -1004,14 +2057,45 @@ mod tests {
     }
 
     #[test]
+    fn claim_support_round_trips_null_and_scored_claims() {
+        let payload = fixture_payload();
+        let store = GraphStore::open_memory().expect("open store");
+        store.init_schema().expect("init schema");
+        let report = store
+            .ingest(&payload, None, CREATED_AT)
+            .expect("ingest fixture");
+
+        let support = store
+            .claim_support(&report.dossier_id, AS_OF_NOW)
+            .expect("claim_support");
+        assert_eq!(support.len(), payload.claims.len());
+
+        let assumption = support
+            .iter()
+            .find(|row| row.claim_id == "clm:chinese-fabs-cannot-access-secondhand-euv")
+            .expect("assumption claim's support row present");
+        assert_eq!(assumption.support, None);
+        assert_eq!(assumption.method, "none");
+
+        let fact = support
+            .iter()
+            .find(|row| row.claim_id == "clm:smic-achieved-7nm-class-node-2023")
+            .expect("fact claim's support row present");
+        assert_eq!(fact.support, Some(0.9));
+        assert_eq!(fact.method, "jev");
+    }
+
+    #[test]
     fn causal_chains_contains_a_path_of_at_least_four_nodes() {
         let payload = fixture_payload();
         let store = GraphStore::open_memory().expect("open store");
         store.init_schema().expect("init schema");
-        let report = store.ingest(&payload, CREATED_AT).expect("ingest fixture");
+        let report = store
+            .ingest(&payload, None, CREATED_AT)
+            .expect("ingest fixture");
 
         let chains = store
-            .causal_chains(&report.dossier_id)
+            .causal_chains(&report.dossier_id, AS_OF_NOW)
             .expect("causal_chains");
         assert!(
             chains.iter().any(|chain| chain.path.len() >= 4),
@@ -1024,9 +2108,11 @@ mod tests {
         let payload = fixture_payload();
         let store = GraphStore::open_memory().expect("open store");
         store.init_schema().expect("init schema");
-        let report = store.ingest(&payload, CREATED_AT).expect("ingest fixture");
+        let report = store
+            .ingest(&payload, None, CREATED_AT)
+            .expect("ingest fixture");
 
-        let cruxes = store.cruxes(&report.dossier_id).expect("cruxes");
+        let cruxes = store.cruxes(&report.dossier_id, AS_OF_NOW).expect("cruxes");
         assert!(!cruxes.is_empty());
         assert!(cruxes.len() <= 3);
         for crux in &cruxes {
@@ -1043,9 +2129,13 @@ mod tests {
         let payload = fixture_payload();
         let store = GraphStore::open_memory().expect("open store");
         store.init_schema().expect("init schema");
-        let report = store.ingest(&payload, CREATED_AT).expect("ingest fixture");
+        let report = store
+            .ingest(&payload, None, CREATED_AT)
+            .expect("ingest fixture");
 
-        let consensus = store.consensus(&report.dossier_id).expect("consensus");
+        let consensus = store
+            .consensus(&report.dossier_id, AS_OF_NOW)
+            .expect("consensus");
         assert!(!consensus.is_empty());
         assert!(consensus
             .iter()
@@ -1060,10 +2150,12 @@ mod tests {
         let payload = fixture_payload();
         let store = GraphStore::open_memory().expect("open store");
         store.init_schema().expect("init schema");
-        let report = store.ingest(&payload, CREATED_AT).expect("ingest fixture");
+        let report = store
+            .ingest(&payload, None, CREATED_AT)
+            .expect("ingest fixture");
 
         let rows = store
-            .temporal_relations(&report.dossier_id)
+            .temporal_relations(&report.dossier_id, AS_OF_NOW)
             .expect("temporal_relations");
         assert_eq!(rows.len(), payload.temporal_relations.len());
     }
@@ -1073,10 +2165,12 @@ mod tests {
         let payload = fixture_payload();
         let store = GraphStore::open_memory().expect("open store");
         store.init_schema().expect("init schema");
-        store.ingest(&payload, CREATED_AT).expect("ingest fixture");
+        store
+            .ingest(&payload, None, CREATED_AT)
+            .expect("ingest fixture");
 
         let rows = store
-            .similar_evidence("SMIC 7nm Huawei Mate 60")
+            .similar_evidence("SMIC 7nm Huawei Mate 60", AS_OF_NOW)
             .expect("similar_evidence");
         assert_eq!(rows.len(), 8);
         for pair in rows.windows(2) {
@@ -1095,10 +2189,15 @@ mod tests {
         let payload = fixture_payload();
         let store = GraphStore::open_memory().expect("open store");
         store.init_schema().expect("init schema");
-        store.ingest(&payload, CREATED_AT).expect("ingest fixture");
+        store
+            .ingest(&payload, None, CREATED_AT)
+            .expect("ingest fixture");
 
         let rows = store
-            .similar_claims("export controls semiconductor manufacturing China")
+            .similar_claims(
+                "export controls semiconductor manufacturing China",
+                AS_OF_NOW,
+            )
             .expect("similar_claims");
         assert_eq!(rows.len(), 5);
         for pair in rows.windows(2) {
@@ -1107,31 +2206,33 @@ mod tests {
     }
 
     #[test]
-    fn dossier_question_round_trips_and_reingest_is_stable() {
+    fn dossier_meta_round_trips_and_reingest_is_stable() {
         let payload = fixture_payload();
         let store = GraphStore::open_memory().expect("open store");
         store.init_schema().expect("init schema");
-        let report = store.ingest(&payload, CREATED_AT).expect("first ingest");
+        let report = store
+            .ingest(&payload, None, CREATED_AT)
+            .expect("first ingest");
 
         assert_eq!(
             store
-                .dossier_question(&report.dossier_id)
-                .expect("dossier_question"),
-            Some(payload.question.clone())
+                .dossier_meta(&report.dossier_id, AS_OF_NOW)
+                .expect("dossier_meta"),
+            Some((payload.question.clone(), CREATED_AT.to_string()))
         );
 
-        let second_report = store.ingest(&payload, CREATED_AT).expect("re-ingest");
+        let second_report = store.ingest(&payload, None, CREATED_AT).expect("re-ingest");
         assert_eq!(second_report, report);
         assert_eq!(
             store
-                .entities(&report.dossier_id)
+                .entities(&report.dossier_id, AS_OF_NOW)
                 .expect("entities after re-ingest")
                 .len(),
             payload.entities.len()
         );
         assert_eq!(
             store
-                .evidence(&report.dossier_id)
+                .evidence(&report.dossier_id, AS_OF_NOW)
                 .expect("evidence after re-ingest")
                 .len(),
             payload.evidence.len()
@@ -1145,12 +2246,14 @@ mod tests {
         store.init_schema().expect("init schema");
 
         let report = store
-            .ingest(&payload, CREATED_AT)
+            .ingest(&payload, None, CREATED_AT)
             .expect("ingest minimal payload");
         assert_eq!(report.entities, 1);
         assert_eq!(report.evidence, 0);
 
-        let entities = store.entities(&report.dossier_id).expect("entities");
+        let entities = store
+            .entities(&report.dossier_id, AS_OF_NOW)
+            .expect("entities");
         assert_eq!(entities.len(), 1);
         assert_eq!(entities[0].id, "ent:only-one");
     }
@@ -1183,18 +2286,11 @@ mod tests {
             .run_script(script, params, ScriptMutability::Mutable);
         assert!(result.is_err(), "expected the chained script to fail");
 
-        let dossier_param = {
-            let mut params = BTreeMap::new();
-            params.insert(
-                "dossier_id".to_string(),
-                DataValue::from("dos:does-not-matter"),
-            );
-            params
-        };
         let rows = store
             .run(
-                "?[id, name, kind, description] := *entity{id, name, kind, description}",
-                dossier_param,
+                "?[id, name, kind, description] := *entity{id, name, kind, description} \
+                 :as_of $as_of",
+                as_of_param(AS_OF_NOW),
             )
             .expect("query entity relation directly");
         assert!(
@@ -1213,15 +2309,18 @@ mod tests {
             let store = GraphStore::open_sqlite(&db_path).expect("open sqlite store");
             store.init_schema().expect("init schema");
             let payload = fixture_payload();
-            store.ingest(&payload, CREATED_AT).expect("ingest fixture");
+            store
+                .ingest(&payload, None, CREATED_AT)
+                .expect("ingest fixture");
         }
 
         let reopened = GraphStore::open_sqlite(&db_path).expect("reopen sqlite store");
         let dossier_id = dossier_id_for(&fixture_payload().question);
         assert_eq!(
             reopened
-                .dossier_question(&dossier_id)
-                .expect("dossier_question after reopen"),
+                .dossier_meta(&dossier_id, AS_OF_NOW)
+                .expect("dossier_meta after reopen")
+                .map(|(question, _)| question),
             Some(fixture_payload().question)
         );
     }
@@ -1232,13 +2331,15 @@ mod tests {
         store.init_schema().expect("init schema");
 
         let payload_a = fixture_payload();
-        let report_a = store.ingest(&payload_a, CREATED_AT).expect("ingest A");
+        let report_a = store
+            .ingest(&payload_a, None, CREATED_AT)
+            .expect("ingest A");
 
         let b_claim_text = "Dossier B's own minimal claim for cross-dossier vector testing.";
         let payload_b = ExtractionPayload {
-            schema_version: 1,
+            schema_version: 2,
             question: "Is unrelated dossier B fully isolated from dossier A?".to_string(),
-            entities: vec![crate::model::Entity {
+            entities: vec![Entity {
                 id: "ent:dossier-b-only".to_string(),
                 name: "Dossier B Only Entity".to_string(),
                 kind: "organization".to_string(),
@@ -1246,22 +2347,32 @@ mod tests {
             }],
             events: vec![],
             sources: vec![],
-            claims: vec![crate::model::Claim {
+            claims: vec![Claim {
                 id: "clm:dossier-b-only".to_string(),
                 text: b_claim_text.to_string(),
                 kind: "assumption".to_string(),
                 subject_ids: vec!["ent:dossier-b-only".to_string()],
+                support: None,
+                support_method: "none".to_string(),
             }],
             evidence: vec![],
             causal_links: vec![],
             temporal_relations: vec![],
+            gate_log: vec![],
+            dropped_sources: vec![],
         };
-        let report_b = store.ingest(&payload_b, CREATED_AT).expect("ingest B");
+        let report_b = store
+            .ingest(&payload_b, None, CREATED_AT)
+            .expect("ingest B");
 
-        let entities_a = store.entities(&report_a.dossier_id).expect("entities A");
+        let entities_a = store
+            .entities(&report_a.dossier_id, AS_OF_NOW)
+            .expect("entities A");
         assert!(!entities_a.iter().any(|row| row.id == "ent:dossier-b-only"));
 
-        let entities_b = store.entities(&report_b.dossier_id).expect("entities B");
+        let entities_b = store
+            .entities(&report_b.dossier_id, AS_OF_NOW)
+            .expect("entities B");
         assert!(entities_b.iter().all(|row| row.id == "ent:dossier-b-only"));
         assert!(!entities_b
             .iter()
@@ -1272,7 +2383,7 @@ mod tests {
         // result must come from dossier A: proof that similar_claims does
         // not scope by dossier.
         let similar = store
-            .similar_claims(b_claim_text)
+            .similar_claims(b_claim_text, AS_OF_NOW)
             .expect("similar_claims across dossiers");
         assert_eq!(similar.len(), 5);
         assert!(similar.iter().any(|row| row.id == "clm:dossier-b-only"));
@@ -1290,12 +2401,18 @@ mod tests {
     /// relation from the shared event to a B-only event, and a
     /// contradicting, quality-0.95 evidence item citing a B-only source.
     fn dossier_b_sharing_ids_with_fixture_a() -> ExtractionPayload {
+        let b_only_source = make_source(
+            "wikipedia",
+            "B Only Source",
+            "https://example.com/b-only-source",
+            "B-only source content for the cross-dossier leak test.",
+        );
         ExtractionPayload {
-            schema_version: 1,
+            schema_version: 2,
             question: "Did the October 2022 rule directly cause the B-only claim in this \
                         handcrafted dossier?"
                 .to_string(),
-            entities: vec![crate::model::Entity {
+            entities: vec![Entity {
                 id: "ent:b-only-actor".to_string(),
                 name: "B Only Actor".to_string(),
                 kind: "organization".to_string(),
@@ -1322,31 +2439,26 @@ mod tests {
                     actor_ids: vec![],
                 },
             ],
-            sources: vec![crate::model::Source {
-                id: "src:b-only-source".to_string(),
-                title: "B Only Source".to_string(),
-                url: "https://example.com/b-only-source".to_string(),
-                provider: "wikipedia".to_string(),
-                published: String::new(),
-                retrieved_at: CREATED_AT.to_string(),
-            }],
-            claims: vec![crate::model::Claim {
+            sources: vec![b_only_source.clone()],
+            claims: vec![Claim {
                 id: "clm:controls-durably-slow-china".to_string(),
                 text: "Export controls durably slow China's access to advanced semiconductor \
                        manufacturing capability, rather than merely delaying it."
                     .to_string(),
                 kind: "hypothesis".to_string(),
                 subject_ids: vec!["ent:b-only-actor".to_string()],
+                support: Some(0.2),
+                support_method: "jev".to_string(),
             }],
-            evidence: vec![crate::model::Evidence {
+            evidence: vec![Evidence {
                 id: "evd:b-only-evidence".to_string(),
                 claim_id: "clm:controls-durably-slow-china".to_string(),
-                source_id: "src:b-only-source".to_string(),
+                source_id: b_only_source.id,
                 stance: "contradicts".to_string(),
                 excerpt: "Dossier B's own evidence contradicting the shared claim.".to_string(),
                 quality: 0.95,
             }],
-            causal_links: vec![crate::model::CausalLink {
+            causal_links: vec![CausalLink {
                 cause_id: "evt:bis-export-controls-2022".to_string(),
                 effect_id: "clm:controls-durably-slow-china".to_string(),
                 mechanism: "Dossier B's own causal link from the shared event to the shared \
@@ -1359,6 +2471,8 @@ mod tests {
                 after_id: "evt:b-only-event".to_string(),
                 relation: "before".to_string(),
             }],
+            gate_log: vec![],
+            dropped_sources: vec![],
         }
     }
 
@@ -1368,78 +2482,86 @@ mod tests {
         store.init_schema().expect("init schema");
 
         let payload_a = fixture_payload();
-        let report_a = store.ingest(&payload_a, CREATED_AT).expect("ingest A");
+        let report_a = store
+            .ingest(&payload_a, None, CREATED_AT)
+            .expect("ingest A");
 
         let event_actors_before = store
-            .event_actors(&report_a.dossier_id)
+            .event_actors(&report_a.dossier_id, AS_OF_NOW)
             .expect("event_actors before B");
         let claim_subjects_before = store
-            .claim_subjects(&report_a.dossier_id)
+            .claim_subjects(&report_a.dossier_id, AS_OF_NOW)
             .expect("claim_subjects before B");
         let claims_with_stance_before = store
-            .claims_with_stance(&report_a.dossier_id)
+            .claims_with_stance(&report_a.dossier_id, AS_OF_NOW)
             .expect("claims_with_stance before B");
         let causal_links_before = store
-            .causal_links(&report_a.dossier_id)
+            .causal_links(&report_a.dossier_id, AS_OF_NOW)
             .expect("causal_links before B");
         let causal_chains_before = store
-            .causal_chains(&report_a.dossier_id)
+            .causal_chains(&report_a.dossier_id, AS_OF_NOW)
             .expect("causal_chains before B");
-        let cruxes_before = store.cruxes(&report_a.dossier_id).expect("cruxes before B");
+        let cruxes_before = store
+            .cruxes(&report_a.dossier_id, AS_OF_NOW)
+            .expect("cruxes before B");
         let consensus_before = store
-            .consensus(&report_a.dossier_id)
+            .consensus(&report_a.dossier_id, AS_OF_NOW)
             .expect("consensus before B");
         let temporal_before = store
-            .temporal_relations(&report_a.dossier_id)
+            .temporal_relations(&report_a.dossier_id, AS_OF_NOW)
             .expect("temporal_relations before B");
 
         let payload_b = dossier_b_sharing_ids_with_fixture_a();
         payload_b.validate().expect("payload B is valid");
-        store.ingest(&payload_b, CREATED_AT).expect("ingest B");
+        store
+            .ingest(&payload_b, None, CREATED_AT)
+            .expect("ingest B");
 
         assert_eq!(
             store
-                .event_actors(&report_a.dossier_id)
+                .event_actors(&report_a.dossier_id, AS_OF_NOW)
                 .expect("event_actors after B"),
             event_actors_before
         );
         assert_eq!(
             store
-                .claim_subjects(&report_a.dossier_id)
+                .claim_subjects(&report_a.dossier_id, AS_OF_NOW)
                 .expect("claim_subjects after B"),
             claim_subjects_before
         );
         assert_eq!(
             store
-                .claims_with_stance(&report_a.dossier_id)
+                .claims_with_stance(&report_a.dossier_id, AS_OF_NOW)
                 .expect("claims_with_stance after B"),
             claims_with_stance_before
         );
         assert_eq!(
             store
-                .causal_links(&report_a.dossier_id)
+                .causal_links(&report_a.dossier_id, AS_OF_NOW)
                 .expect("causal_links after B"),
             causal_links_before
         );
         assert_eq!(
             store
-                .causal_chains(&report_a.dossier_id)
+                .causal_chains(&report_a.dossier_id, AS_OF_NOW)
                 .expect("causal_chains after B"),
             causal_chains_before
         );
         assert_eq!(
-            store.cruxes(&report_a.dossier_id).expect("cruxes after B"),
+            store
+                .cruxes(&report_a.dossier_id, AS_OF_NOW)
+                .expect("cruxes after B"),
             cruxes_before
         );
         assert_eq!(
             store
-                .consensus(&report_a.dossier_id)
+                .consensus(&report_a.dossier_id, AS_OF_NOW)
                 .expect("consensus after B"),
             consensus_before
         );
         assert_eq!(
             store
-                .temporal_relations(&report_a.dossier_id)
+                .temporal_relations(&report_a.dossier_id, AS_OF_NOW)
                 .expect("temporal_relations after B"),
             temporal_before
         );
@@ -1454,26 +2576,26 @@ mod tests {
     /// other 2, never itself.
     #[test]
     fn causal_chains_do_not_revisit_nodes() {
-        let source = crate::model::Source {
-            id: "src:cycle-source".to_string(),
-            title: "Cycle Source".to_string(),
-            url: "https://example.com/cycle-source".to_string(),
-            provider: "wikipedia".to_string(),
-            published: String::new(),
-            retrieved_at: CREATED_AT.to_string(),
-        };
+        let source = make_source(
+            "wikipedia",
+            "Cycle Source",
+            "https://example.com/cycle-source",
+            "Cycle source content shared by every claim in the three-node cycle test.",
+        );
 
         let mut claims = Vec::new();
         let mut evidence = Vec::new();
         for n in 1..=3 {
             let claim_id = format!("clm:cycle-{n}");
-            claims.push(crate::model::Claim {
+            claims.push(Claim {
                 id: claim_id.clone(),
                 text: format!("Contested claim {n} in a three-node causal cycle."),
                 kind: "hypothesis".to_string(),
                 subject_ids: vec![],
+                support: Some(0.5),
+                support_method: "jev".to_string(),
             });
-            evidence.push(crate::model::Evidence {
+            evidence.push(Evidence {
                 id: format!("evd:cycle-{n}-supports"),
                 claim_id: claim_id.clone(),
                 source_id: source.id.clone(),
@@ -1481,7 +2603,7 @@ mod tests {
                 excerpt: format!("Supporting excerpt for cycle claim {n}."),
                 quality: 0.5,
             });
-            evidence.push(crate::model::Evidence {
+            evidence.push(Evidence {
                 id: format!("evd:cycle-{n}-contradicts"),
                 claim_id,
                 source_id: source.id.clone(),
@@ -1492,19 +2614,19 @@ mod tests {
         }
 
         let causal_links = vec![
-            crate::model::CausalLink {
+            CausalLink {
                 cause_id: "clm:cycle-1".to_string(),
                 effect_id: "clm:cycle-2".to_string(),
                 mechanism: "Cycle edge 1 -> 2.".to_string(),
                 confidence: "low".to_string(),
             },
-            crate::model::CausalLink {
+            CausalLink {
                 cause_id: "clm:cycle-2".to_string(),
                 effect_id: "clm:cycle-3".to_string(),
                 mechanism: "Cycle edge 2 -> 3.".to_string(),
                 confidence: "low".to_string(),
             },
-            crate::model::CausalLink {
+            CausalLink {
                 cause_id: "clm:cycle-3".to_string(),
                 effect_id: "clm:cycle-1".to_string(),
                 mechanism: "Cycle edge 3 -> 1.".to_string(),
@@ -1513,7 +2635,7 @@ mod tests {
         ];
 
         let payload = ExtractionPayload {
-            schema_version: 1,
+            schema_version: 2,
             question: "Does a three-node causal cycle stay well-formed under the chain and \
                         crux queries?"
                 .to_string(),
@@ -1524,17 +2646,19 @@ mod tests {
             evidence,
             causal_links,
             temporal_relations: vec![],
+            gate_log: vec![],
+            dropped_sources: vec![],
         };
         payload.validate().expect("cycle payload is valid");
 
         let store = GraphStore::open_memory().expect("open store");
         store.init_schema().expect("init schema");
         let report = store
-            .ingest(&payload, CREATED_AT)
+            .ingest(&payload, None, CREATED_AT)
             .expect("ingest cycle payload");
 
         let chains = store
-            .causal_chains(&report.dossier_id)
+            .causal_chains(&report.dossier_id, AS_OF_NOW)
             .expect("causal_chains");
         assert!(!chains.is_empty());
         for chain in &chains {
@@ -1546,7 +2670,7 @@ mod tests {
             );
         }
 
-        let cruxes = store.cruxes(&report.dossier_id).expect("cruxes");
+        let cruxes = store.cruxes(&report.dossier_id, AS_OF_NOW).expect("cruxes");
         assert_eq!(
             cruxes.len(),
             3,
@@ -1559,5 +2683,472 @@ mod tests {
                 crux.id
             );
         }
+    }
+
+    // --- Schema v2 / bitemporality proofs -----------------------------
+
+    /// `::hnsw create` on a `tt`-stamped relation is rejected by mnestic
+    /// 0.18.0 (verified empirically against both `mem` and `sqlite` before
+    /// this schema was written; see the build log): this is *why*
+    /// `claim`/`evidence` embeddings live in the plain side relations
+    /// `claim_vec`/`evidence_vec` instead of on `claim`/`evidence`
+    /// themselves. This test keeps that fact under CI rather than only in
+    /// the build log, so a future mnestic upgrade that lifted the
+    /// restriction (or silently re-imposed a different one) would be
+    /// caught here.
+    #[test]
+    fn hnsw_index_creation_is_rejected_on_a_txtime_relation() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let cases: Vec<(&str, Option<std::path::PathBuf>)> = vec![
+            ("mem", None),
+            ("sqlite", Some(dir.path().join("hnsw-tt-probe.db"))),
+        ];
+        for (engine, path) in cases {
+            let db = match &path {
+                None => DbInstance::new(engine, "", "").expect("open db"),
+                Some(path) => DbInstance::new(engine, path, "").expect("open db"),
+            };
+            db.run_script(
+                "{:create probe_tt_vec {id: String, tt: TxTime => embedding: <F32; 4>}}",
+                BTreeMap::new(),
+                ScriptMutability::Mutable,
+            )
+            .expect("create tt-stamped relation");
+            let result = db.run_script(
+                "::hnsw create probe_tt_vec:idx {dim: 4, m: 16, dtype: F32, \
+                 fields: [embedding], distance: Cosine, ef_construction: 64}",
+                BTreeMap::new(),
+                ScriptMutability::Mutable,
+            );
+            assert!(
+                result.is_err(),
+                "[{engine}] expected HNSW create on a TxTime relation to fail"
+            );
+            let message = format!("{:?}", result.unwrap_err());
+            assert!(
+                message.contains("TxTime") || message.contains("transaction-time"),
+                "[{engine}] unexpected error message: {message}"
+            );
+        }
+    }
+
+    /// Re-ingesting a dossier whose source content changed keeps BOTH
+    /// versions reachable: current state shows the new content_hash, and
+    /// `as_of` a point between the two ingests shows the old one
+    /// (`docs/contracts.md` decision 2, instruction (a)).
+    #[test]
+    fn reingest_with_changed_source_content_keeps_both_versions() {
+        let store = GraphStore::open_memory().expect("open store");
+        store.init_schema().expect("init schema");
+
+        let original = fixture_payload();
+        let updated = fixture_payload_updated();
+        assert_eq!(
+            dossier_id_for(&original.question),
+            dossier_id_for(&updated.question),
+            "fixtures must share a dossier id for this test to be meaningful"
+        );
+        let target_source_id = "src:wikipedia:c0d661fe10e6d398";
+        let old_hash = original
+            .sources
+            .iter()
+            .find(|s| s.id == target_source_id)
+            .expect("target source in original fixture")
+            .content_hash
+            .clone();
+        let new_hash = updated
+            .sources
+            .iter()
+            .find(|s| s.id == target_source_id)
+            .expect("target source in updated fixture")
+            .content_hash
+            .clone();
+        assert_ne!(old_hash, new_hash, "fixtures must actually differ");
+
+        let first_created_at = "2026-09-14T00:00:00Z";
+        let report_1 = store
+            .ingest(&original, None, first_created_at)
+            .expect("first ingest");
+
+        // A real wall-clock gap so the two ingests land in different
+        // whole seconds: the public `as_of` contract is second-precision
+        // RFC 3339, so a between-point at sub-second resolution could not
+        // be expressed as an HTTP query parameter even if mnestic's
+        // internal clock is finer-grained.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let between = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+
+        let second_created_at =
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let report_2 = store
+            .ingest(&updated, None, &second_created_at)
+            .expect("second ingest");
+        assert_eq!(report_1.dossier_id, report_2.dossier_id);
+
+        let current_sources = store
+            .sources(&report_2.dossier_id, AS_OF_NOW)
+            .expect("current sources");
+        let current = current_sources
+            .iter()
+            .find(|s| s.id == target_source_id)
+            .expect("target source present currently");
+        assert_eq!(
+            current.content_hash, new_hash,
+            "current state should be the new version"
+        );
+
+        let past_sources = store
+            .sources(&report_2.dossier_id, &between)
+            .expect("sources as of the between point");
+        let past = past_sources
+            .iter()
+            .find(|s| s.id == target_source_id)
+            .expect("target source present as of the between point");
+        assert_eq!(
+            past.content_hash, old_hash,
+            "as_of between the two ingests should be the old version"
+        );
+
+        // The blob relation is content-addressed and keeps both bodies
+        // (nothing was overwritten): both hashes resolve to their own
+        // distinct content.
+        let old_content = store
+            .blob_content(&old_hash)
+            .expect("blob_content old")
+            .expect("old blob present");
+        let new_content = store
+            .blob_content(&new_hash)
+            .expect("blob_content new")
+            .expect("new blob present");
+        assert_ne!(old_content, new_content);
+    }
+
+    /// A dossier queried `as_of` a point strictly before its first ingest
+    /// does not exist yet: `dossier_meta` and every dossier-scoped query
+    /// return empty, not an error (`docs/contracts.md` §C3: "Anything
+    /// before the first write returns empty results, not an error";
+    /// instruction (b), the non-HTTP half — the HTTP-level proof against
+    /// `GET /api/dossiers/{id}/briefing?as_of` lives in `tests/roundtrip.rs`).
+    #[test]
+    fn as_of_before_first_ingest_is_empty_not_an_error() {
+        let store = GraphStore::open_memory().expect("open store");
+        store.init_schema().expect("init schema");
+
+        let payload = fixture_payload();
+        let before = "2000-01-01T00:00:00Z";
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let report = store
+            .ingest(&payload, None, CREATED_AT)
+            .expect("ingest fixture");
+
+        assert_eq!(
+            store
+                .dossier_meta(&report.dossier_id, before)
+                .expect("dossier_meta as_of before ingest"),
+            None
+        );
+        assert!(store
+            .entities(&report.dossier_id, before)
+            .expect("entities as_of before ingest")
+            .is_empty());
+        assert!(store
+            .claims_with_stance(&report.dossier_id, before)
+            .expect("claims_with_stance as_of before ingest")
+            .is_empty());
+    }
+
+    /// Family lifecycle: minting picks the base slug, then `-2`/`-3` on
+    /// collision; merging is prospective (the absorbed family's own row is
+    /// unaffected, only `merged_into` changes); `resolve_family_id` follows
+    /// a multi-hop merge chain to the live root and stops on a
+    /// self-referential cycle rather than looping.
+    #[test]
+    fn family_minting_and_merge_chain_resolution() {
+        let store = GraphStore::open_memory().expect("open store");
+        store.init_schema().expect("init schema");
+
+        let first = store
+            .mint_family_id("ECB rate decisions")
+            .expect("mint first");
+        assert_eq!(first, "fam:ecb-rate-decisions");
+        store
+            .insert_family(&first, "ECB rate decisions", "d1", CREATED_AT)
+            .expect("insert first");
+
+        let second = store
+            .mint_family_id("ECB rate decisions")
+            .expect("mint second");
+        assert_eq!(second, "fam:ecb-rate-decisions-2");
+        store
+            .insert_family(&second, "ECB rate decisions", "d2", CREATED_AT)
+            .expect("insert second");
+
+        let third_label = "ECB Rate Decisions"; // same slug as the first two
+        let third = store.mint_family_id(third_label).expect("mint third");
+        assert_eq!(third, "fam:ecb-rate-decisions-3");
+        store
+            .insert_family(&third, third_label, "d3", CREATED_AT)
+            .expect("insert third");
+
+        // Multi-hop chain: third -> second -> first.
+        store
+            .merge_family(&third, &second)
+            .expect("merge third into second");
+        store
+            .merge_family(&second, &first)
+            .expect("merge second into first");
+
+        let families = store.all_families(AS_OF_NOW).expect("all_families");
+        assert_eq!(GraphStore::resolve_family_id(&families, &third), first);
+        assert_eq!(GraphStore::resolve_family_id(&families, &second), first);
+        assert_eq!(GraphStore::resolve_family_id(&families, &first), first);
+
+        // The absorbed family's own label/description survive the merge
+        // (only merged_into changed); only `merged_into` changed.
+        let second_row = families
+            .iter()
+            .find(|f| f.id == second)
+            .expect("second family row");
+        assert_eq!(second_row.label, "ECB rate decisions");
+        assert_eq!(second_row.description, "d2");
+        assert_eq!(second_row.merged_into.as_deref(), Some(first.as_str()));
+
+        // A self-referential cycle must not hang resolve_family_id.
+        let mut cyclic = families.clone();
+        cyclic.push(FamilyRow {
+            id: "fam:cycle-a".to_string(),
+            label: "Cycle A".to_string(),
+            description: String::new(),
+            created_at: CREATED_AT.to_string(),
+            merged_into: Some("fam:cycle-b".to_string()),
+        });
+        cyclic.push(FamilyRow {
+            id: "fam:cycle-b".to_string(),
+            label: "Cycle B".to_string(),
+            description: String::new(),
+            created_at: CREATED_AT.to_string(),
+            merged_into: Some("fam:cycle-a".to_string()),
+        });
+        let resolved = GraphStore::resolve_family_id(&cyclic, "fam:cycle-a");
+        assert!(resolved == "fam:cycle-a" || resolved == "fam:cycle-b");
+    }
+
+    /// `dossiers_for_family` follows `dossier_question` -> `question_family`
+    /// (resolved through merge chains) and orders newest dossier first;
+    /// `claim_views_for_dossiers` concatenates in that order and truncates
+    /// to the caller's limit. `documents`'s family filter uses the same
+    /// resolution and returns only that family's sources (instruction (c)).
+    #[test]
+    fn family_scoped_reads_resolve_tags_order_and_filter_correctly() {
+        let store = GraphStore::open_memory().expect("open store");
+        store.init_schema().expect("init schema");
+
+        store
+            .insert_family("fam:root", "Root Family", "root", CREATED_AT)
+            .expect("insert root family");
+        store
+            .insert_family("fam:absorbed", "Absorbed Family", "absorbed", CREATED_AT)
+            .expect("insert absorbed family");
+        store
+            .merge_family("fam:absorbed", "fam:root")
+            .expect("merge absorbed into root");
+
+        let older_payload = small_payload(
+            "Older question tagged directly to the root family?",
+            "ent:older",
+            "Older Entity",
+        );
+        let older_created_at = "2026-01-01T00:00:00Z";
+        let older_report = store
+            .ingest(&older_payload, Some("q:older"), older_created_at)
+            .expect("ingest older dossier");
+        store
+            .record_question_family(
+                "q:older",
+                "fam:root",
+                Some(0.4),
+                "jev",
+                &older_payload.question,
+            )
+            .expect("tag older question to root");
+
+        let newer_source = make_source(
+            "wikipedia",
+            "Newer Source",
+            "https://example.com/newer-source",
+            "Newer source content for the family-scoped documents filter test.",
+        );
+        let newer_payload = ExtractionPayload {
+            schema_version: 2,
+            question: "Newer question tagged to the absorbed family?".to_string(),
+            entities: vec![],
+            events: vec![],
+            sources: vec![newer_source.clone()],
+            claims: vec![Claim {
+                id: "clm:newer-claim".to_string(),
+                text: "A newer claim for the family-scoped ordering test.".to_string(),
+                kind: "hypothesis".to_string(),
+                subject_ids: vec![],
+                support: Some(0.6),
+                support_method: "jev".to_string(),
+            }],
+            evidence: vec![],
+            causal_links: vec![],
+            temporal_relations: vec![],
+            gate_log: vec![],
+            dropped_sources: vec![],
+        };
+        let newer_created_at = "2026-06-01T00:00:00Z";
+        let newer_report = store
+            .ingest(&newer_payload, Some("q:newer"), newer_created_at)
+            .expect("ingest newer dossier");
+        // Tagged to the now-absorbed family id, on purpose: resolution must
+        // still land on the live root, both for the family-claims read and
+        // for the documents filter.
+        store
+            .record_question_family(
+                "q:newer",
+                "fam:absorbed",
+                Some(0.7),
+                "jev",
+                &newer_payload.question,
+            )
+            .expect("tag newer question to absorbed family");
+
+        let dossier_ids = store
+            .dossiers_for_family("fam:root", AS_OF_NOW)
+            .expect("dossiers_for_family");
+        assert_eq!(
+            dossier_ids,
+            vec![
+                newer_report.dossier_id.clone(),
+                older_report.dossier_id.clone()
+            ],
+            "newest dossier (by created_at) must come first"
+        );
+
+        let views = store
+            .claim_views_for_dossiers(&dossier_ids, AS_OF_NOW, 1)
+            .expect("claim_views_for_dossiers truncated to 1");
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].claim_id, "clm:newer-claim");
+
+        let documents = store
+            .documents(AS_OF_NOW, Some("fam:root"), 50, false)
+            .expect("documents scoped to fam:root");
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0].source_id, newer_source.id);
+
+        // Querying by the absorbed id directly must resolve to the same
+        // result as querying by the live root id.
+        let documents_via_absorbed = store
+            .documents(AS_OF_NOW, Some("fam:absorbed"), 50, false)
+            .expect("documents scoped to fam:absorbed");
+        assert_eq!(documents_via_absorbed, documents);
+    }
+
+    #[test]
+    fn history_upserts_and_json_forecast_shapes_round_trip() {
+        let store = GraphStore::open_memory().expect("open store");
+        store.init_schema().expect("init schema");
+
+        let binary = HistoryItem {
+            id: "metaculus:41234".to_string(),
+            kind: "personal".to_string(),
+            title: "Will the ECB cut rates?".to_string(),
+            url: "https://www.metaculus.com/questions/41234".to_string(),
+            question_type: "binary".to_string(),
+            forecast: serde_json::json!(0.42),
+            resolution: None,
+            resolved_at: None,
+            family_id: Some("fam:ecb-rate-decisions".to_string()),
+            note: String::new(),
+        };
+        let multiple_choice = HistoryItem {
+            id: "metaculus:5678".to_string(),
+            kind: "bot".to_string(),
+            title: "Which candidate wins?".to_string(),
+            url: "https://www.metaculus.com/questions/5678".to_string(),
+            question_type: "multiple_choice".to_string(),
+            forecast: serde_json::json!({"yes": 0.6, "no": 0.4}),
+            resolution: Some("yes".to_string()),
+            resolved_at: Some("2026-08-01T00:00:00Z".to_string()),
+            family_id: None,
+            note: "resolved".to_string(),
+        };
+        store
+            .upsert_history(&[binary.clone(), multiple_choice.clone()])
+            .expect("upsert_history");
+
+        let all = store.all_history(AS_OF_NOW).expect("all_history");
+        assert_eq!(all.len(), 2);
+        let binary_row = all
+            .iter()
+            .find(|item| item.id == binary.id)
+            .expect("binary row");
+        assert_eq!(binary_row.forecast, serde_json::json!(0.42));
+        assert_eq!(binary_row.resolution, None);
+        let mc_row = all
+            .iter()
+            .find(|item| item.id == multiple_choice.id)
+            .expect("multiple_choice row");
+        assert_eq!(mc_row.forecast, serde_json::json!({"yes": 0.6, "no": 0.4}));
+        assert_eq!(mc_row.resolution.as_deref(), Some("yes"));
+
+        // Upserting the same id again writes a new tt version, not a
+        // second row.
+        let mut updated_binary = binary.clone();
+        updated_binary.resolution = Some("yes".to_string());
+        updated_binary.resolved_at = Some("2026-09-01T00:00:00Z".to_string());
+        store
+            .upsert_history(std::slice::from_ref(&updated_binary))
+            .expect("re-upsert binary");
+        let all_after = store
+            .all_history(AS_OF_NOW)
+            .expect("all_history after re-upsert");
+        assert_eq!(all_after.len(), 2, "re-upsert must not duplicate the row");
+        let binary_after = all_after
+            .iter()
+            .find(|item| item.id == binary.id)
+            .expect("binary row after re-upsert");
+        assert_eq!(binary_after.resolution.as_deref(), Some("yes"));
+    }
+
+    #[test]
+    fn ingest_raw_documents_computes_content_addressed_ids_and_hashes() {
+        let store = GraphStore::open_memory().expect("open store");
+        store.init_schema().expect("init schema");
+
+        let url = "https://example.com/outbox-document";
+        let content = "Content spooled from the bot's outbox during a degraded-mode replay.";
+        let document = RawDocument {
+            url: url.to_string(),
+            title: "Outbox Document".to_string(),
+            provider: "asknews_news".to_string(),
+            published: String::new(),
+            fetched_at: CREATED_AT.to_string(),
+            content: content.to_string(),
+        };
+
+        let ingested = store
+            .ingest_raw_documents(std::slice::from_ref(&document))
+            .expect("ingest_raw_documents");
+        assert_eq!(ingested, 1);
+
+        let expected_id = format!("src:asknews_news:{}", &sha256_hex(url)[..16]);
+        let all = store.all_sources(AS_OF_NOW, 10).expect("all_sources");
+        let row = all
+            .iter()
+            .find(|source| source.id == expected_id)
+            .expect("raw document present with the expected content-addressed id");
+        assert_eq!(row.content_hash, sha256_hex(content));
+        assert_eq!(
+            store
+                .blob_content(&row.content_hash)
+                .expect("blob_content")
+                .as_deref(),
+            Some(content)
+        );
     }
 }

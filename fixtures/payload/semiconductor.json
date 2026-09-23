@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "question": "Can export controls durably slow China's access to advanced semiconductor manufacturing capability?",
   "entities": [
     {
@@ -118,52 +118,64 @@
   ],
   "sources": [
     {
-      "id": "src:arxiv-9999-00003v1",
+      "id": "src:arxiv:65697ea6b9cc8d14",
       "title": "Cost Scaling of Multipatterned Deep Ultraviolet Lithography at Advanced Logic Nodes",
       "url": "http://arxiv.org/abs/9999.00003v1",
       "provider": "arxiv",
       "published": "2025-02-17",
-      "retrieved_at": "2026-09-14T00:00:00Z"
+      "retrieved_at": "2026-09-14T00:00:00Z",
+      "content": "We present a process-cost model for multipatterned deep ultraviolet lithography as a substitute for extreme ultraviolet exposure at advanced logic nodes, calibrated against publicly reported foundry process step counts and tool throughput figures. The model decomposes per-wafer cost into exposure, etch, clean, and metrology steps required for self-aligned quadruple patterning relative to an equivalent single-exposure extreme ultraviolet flow, and separately estimates the yield penalty from added overlay error and defect opportunities introduced at each additional patterning cycle. Across the node range we examine, the model shows patterning-related cost per wafer rising steeply as target pitch shrinks, driven primarily by the multiplying number of exposure and etch cycles rather than by any single step's unit cost. We further model how yield loss compounds this effect, since each additional patterning cycle both adds direct process cost and reduces the fraction of dies that pass final test, doubling the effective cost impact at the tightest pitches we model. Our results suggest that multipatterned deep ultraviolet lithography remains a technically viable path to a narrow band of advanced-node geometries, consistent with recent foundry announcements of high-density logic production using this approach, but that the cost and yield penalties grow to a point where, at our modeled parameters, further node scaling without extreme ultraviolet access becomes difficult to sustain at commercially representative production volumes.",
+      "content_hash": "300dc8406b1bbbc08e455daa07866aa9be98392f8114bf5833a6ee041a409e3b"
     },
     {
-      "id": "src:arxiv-9999-00002v1",
+      "id": "src:arxiv:a781fa3f3036193a",
       "title": "Domestic Substitution Dynamics Under Sanction Pressure: Evidence from the Semiconductor Equipment Sector",
       "url": "http://arxiv.org/abs/9999.00002v1",
       "provider": "arxiv",
       "published": "2024-09-04",
-      "retrieved_at": "2026-09-14T00:00:00Z"
+      "retrieved_at": "2026-09-14T00:00:00Z",
+      "content": "This paper examines how firms in a sanctioned economy reallocate research and development spending toward domestic substitutes once foreign suppliers become unreliable. Using a panel of equipment-sector firm filings from a jurisdiction subject to escalating technology export restrictions between 2019 and 2023, we document a marked increase in domestic patent filings for lithography, etch, and deposition tool subsystems following each successive restriction, alongside a rise in state-directed capital allocated to firms working on these subsystems. We argue that export restrictions function as an unintended industrial policy signal, concentrating private and state investment on the exact technology categories the restrictions target, which over a multi-year horizon narrows but does not close the capability gap with incumbent suppliers. Case interviews with equipment engineers suggest that the substitution process is bottlenecked less by capital availability and more by accumulated process know-how, which cannot be replicated through funding alone and instead requires extended iterative engineering cycles on production-representative tools. We conclude that sanction-driven substitution dynamics can accelerate the timeline for a target country's indigenous capability without necessarily achieving parity with the restricted technology within the observed window, and we suggest that policy evaluations of export controls should track domestic patenting and state investment flows as leading indicators of long-run erosion in control durability.",
+      "content_hash": "0b44bc96765ee4057f8b95611947c439efb9ff75e74b15fbd5235829e8bba8ad"
     },
     {
-      "id": "src:arxiv-9999-00001v1",
+      "id": "src:arxiv:b457a59b56dd11ef",
       "title": "Modeling the Durability of Technology Export Controls: A Framework for Advanced Manufacturing Sectors",
       "url": "http://arxiv.org/abs/9999.00001v1",
       "provider": "arxiv",
       "published": "2024-03-11",
-      "retrieved_at": "2026-09-14T00:00:00Z"
+      "retrieved_at": "2026-09-14T00:00:00Z",
+      "content": "We develop a formal framework for assessing how long a technology export control regime can constrain a target country's manufacturing capability before domestic substitution or workaround engineering erodes the restriction's effect. The model treats a control regime as a race between two adaptation rates: the pace at which the restricting coalition can identify and close circumvention channels, and the pace at which the target country can either substitute domestic equipment for the restricted inputs or engineer process workarounds that reduce dependence on the restricted technology entirely. We apply the framework qualitatively to the case of lithography equipment controls aimed at advanced logic manufacturing, arguing that durability depends heavily on whether the restricted capability sits at a genuine technological choke point with few substitutable inputs, such as extreme ultraviolet scanners, or whether workaround paths such as multipatterned deep ultraviolet lithography exist that can partially substitute at a cost penalty. We find that controls targeting a narrow, monopolized chokepoint tend to remain binding longer than controls targeting a broader technology class with several viable alternative suppliers or process routes, and we discuss how iterative rule updates that close identified circumvention channels can extend a control regime's effective binding period even where a workaround technically exists.",
+      "content_hash": "e3b23e25ac650207d784bf5177d499270f6f3591573b8d2cb1165125f551a149"
     },
     {
-      "id": "src:wikipedia-extreme-ultraviolet-lithography",
+      "id": "src:wikipedia:28aee3e3337f5c04",
       "title": "Extreme ultraviolet lithography",
       "url": "https://en.wikipedia.org/wiki/Extreme_ultraviolet_lithography",
       "provider": "wikipedia",
       "published": "",
-      "retrieved_at": "2026-09-14T00:00:00Z"
+      "retrieved_at": "2026-09-14T00:00:00Z",
+      "content": "Extreme ultraviolet lithography, or EUV, is a chip-patterning technology that uses 13.5-nanometer light to print features far smaller than what earlier deep ultraviolet, or DUV, scanners can resolve in a single exposure. ASML Holding, based in Veldhoven, the Netherlands, is the only company that manufactures EUV scanners for volume semiconductor production, a position built over roughly two decades of joint development work with optics and light-source suppliers. Because EUV tools are the pacing technology for the most advanced logic nodes, ASML's export decisions and the Dutch government's licensing policy toward those exports have become a central point of leverage in discussions about which countries can build leading-edge chip fabs.\n\nThe Dutch government first moved to restrict EUV exports to China in 2019, under diplomatic pressure from Washington, by declining to renew a export license that would have allowed ASML to ship an EUV system to a Chinese customer. That decision effectively froze Chinese fabs out of EUV access from that point forward, since ASML's export licensing has continued to run through Dutch and, for some tool categories, Wassenaar Arrangement multilateral controls that require government approval for shipments to countries with advanced-node ambitions Washington considers a security concern. ASML has said publicly that it complies fully with the export licensing regimes of the jurisdictions in which it operates, while also noting that the restrictions have reduced its addressable China revenue for its newest tools.\n\nWithout EUV, chipmakers attempting advanced logic nodes must fall back on multipatterning: splitting a single circuit layer that EUV could print in one pass into several separate exposure, etch, and cleaning cycles using older 193-nanometer immersion DUV scanners. Self-aligned double patterning, quadruple patterning, and related techniques can approximate EUV-class resolution, and were in fact the industry standard before EUV reached production maturity in the late 2010s. The tradeoff is substantial: multipatterning typically requires two to four times as many process steps for the affected layers, which extends cycle time, increases the number of opportunities for particle contamination or overlay error, and raises tool and materials costs per finished wafer. Foundries that have used multipatterning at advanced nodes, including in the years before EUV was broadly available, generally reported lower yields and higher scrap rates on those layers compared with single-exposure EUV production once EUV tools came online.\n\nAnalysts who track lithography economics generally agree that multipatterned DUV can reach feature densities in the same broad class as an early EUV-based node, as demonstrated by SMIC's 7-nanometer-class production, but that the approach faces steeply rising costs and yield penalties as engineers attempt to push it toward denser, more advanced nodes. Where EUV proponents see multipatterning as a stopgap with a hard ceiling, some semiconductor engineers argue that continued process refinement could extend the technique's useful range further than early skeptics assumed, pointing to the pace at which multipatterning recipes were optimized during the pre-EUV era. Whether that argument holds at the very tightest pitches remains an open question among lithography specialists, and is one of the more closely watched technical debates in the industry.",
+      "content_hash": "fa4695679b0dc64a763a686ea2c296615df4fb88e26d66221b0124fce18bc79b"
     },
     {
-      "id": "src:wikipedia-semiconductor-industry-in-china",
+      "id": "src:wikipedia:c0d661fe10e6d398",
       "title": "Semiconductor industry in China",
       "url": "https://en.wikipedia.org/wiki/Semiconductor_industry_in_China",
       "provider": "wikipedia",
       "published": "",
-      "retrieved_at": "2026-09-14T00:00:00Z"
+      "retrieved_at": "2026-09-14T00:00:00Z",
+      "content": "China's domestic semiconductor industry has grown from a minor supplier of mature-node chips into a manufacturing base capable of producing logic devices at advanced process nodes, though it remains a step behind the global leaders. The Semiconductor Manufacturing International Corporation, commonly known as SMIC, is the country's largest contract chipmaker and the clearest test case for how far indigenous manufacturing can advance without access to extreme ultraviolet lithography tools. In mid-2023, teardown analysts examining a smartphone processor found evidence that SMIC had produced logic circuitry using a process generation broadly comparable to a 7-nanometer-class node, achieved without EUV equipment by relying instead on repeated exposures with older deep ultraviolet scanners. Industry observers describe this as a notable engineering achievement, since multipatterning approaches of this kind were assumed by many analysts to be commercially impractical at that density.\n\nThe achievement came with acknowledged costs. Multiple industry analysts who reviewed public wafer-cost estimates for SMIC's 7-nanometer-class line concluded that per-wafer costs run well above what a comparable EUV-enabled process would require, since each layer that would normally be patterned in a single EUV exposure must instead be split across several DUV exposure and etch cycles. This raises tool wear, cycle time, and the number of process steps at which a defect can be introduced, all of which tend to depress yield relative to an EUV-based flow. Public estimates of SMIC's yield on its most advanced node vary considerably and are not independently verified, but most industry analysts who track the Chinese foundry sector describe the yield as materially lower than what leading-edge foundries in Taiwan and South Korea report on their equivalent-generation lines. Some analysts argue that this cost and yield gap makes the current 7-nanometer-class output commercially viable only for a narrow set of high-value products, such as flagship smartphone processors, where the customer can absorb a higher per-die cost.\n\nBeijing has backed the sector's expansion through a series of state-directed investment vehicles, most prominently the National Integrated Circuit Industry Investment Fund, widely referred to as the 'Big Fund,' which has run through multiple funding rounds since its creation. Provincial and municipal governments have layered additional subsidies, tax incentives, and low-interest financing on top of the national fund, aiming to build out not just fabrication capacity but also the upstream equipment, materials, and design-tool ecosystem that China still imports heavily. Proponents of this strategy point to measurable increases in domestic equipment shipments and a growing roster of Chinese-origin lithography, etch, and deposition tool suppliers as evidence that the subsidy program is closing gaps in the supply chain, even if those tools remain generations behind the equipment sold by the leading Dutch, American, and Japanese vendors.\n\nCritics of the subsidy-led approach note that large capital outlays do not by themselves resolve the toughest technical bottlenecks, particularly in lithography, where the physics of pattern resolution at advanced nodes has historically rewarded incremental engineering refinement built up over decades rather than capital alone. Corruption investigations touching parts of the Big Fund's leadership in past years have also raised questions, among some observers, about capital-allocation discipline inside the program. Even so, most analysts agree that the scale of state backing has meaningfully accelerated the timeline on which Chinese firms have been able to attempt advanced-node production, even if it has not eliminated the underlying technology gap. The debate among China-watchers is less about whether the investment has had an effect and more about how durable the resulting manufacturing capability will prove to be if it continues to rely on multipatterned DUV rather than EUV lithography, and whether the cost structure that results can be sustained at meaningful production volumes over multiple years.",
+      "content_hash": "fb4609f7d7347b5cc92d994762e60c42ffb1096413c7dad325e7085b5b2dda29"
     },
     {
-      "id": "src:wikipedia-united-states-export-controls-on-semiconductors",
+      "id": "src:wikipedia:041e4de2d62f779e",
       "title": "United States export controls on semiconductors",
       "url": "https://en.wikipedia.org/wiki/United_States_export_controls_on_semiconductors",
       "provider": "wikipedia",
       "published": "",
-      "retrieved_at": "2026-09-14T00:00:00Z"
+      "retrieved_at": "2026-09-14T00:00:00Z",
+      "content": "The United States Bureau of Industry and Security, part of the Department of Commerce, has issued a series of export control rules since 2022 aimed at restricting China's access to advanced semiconductor manufacturing equipment and the high-performance chips that equipment can produce. The first major rule, published on October 7, 2022, imposed license requirements on exports to China of logic chips at advanced process nodes, high-bandwidth memory, and the deposition, etch, and lithography tools used to make them. The rule also restricted the ability of U.S. persons to support the operation or development of certain Chinese fabrication facilities without a license, a provision that reportedly prompted some American engineers working at Chinese fabs to resign rather than seek approval to continue.\n\nA year later, on October 17, 2023, BIS published an updated rule intended to close gaps that chipmakers and equipment vendors had found in the original framework. The 2023 update tightened the performance thresholds that triggered a license requirement, added restrictions on a wider range of advanced packaging techniques, and expanded controls to cover semiconductor manufacturing equipment sold by non-U.S. companies that use more than a minimal share of U.S.-origin technology, extending the rule's reach to some equipment made in the Netherlands and Japan. BIS officials described the 2023 rule as a response to reports that Chinese buyers had been able to obtain restricted chips through intermediaries or slightly modified product variants that fell just under the original thresholds.\n\nA further update took effect on December 2, 2024, adding more Chinese entities to the restricted parties list, extending controls to additional categories of high-bandwidth memory, and placing new limits on servicing and maintenance support that U.S. and allied firms could provide for previously sold equipment already installed in Chinese fabs. Officials at Commerce characterized the sequence of rules as a deliberate, iterative effort to close loopholes as they were identified, rather than a single comprehensive action.\n\nThe cumulative effect of the rules is contested among trade economists and industry analysts. Supporters argue that the controls have measurably slowed the rate at which Chinese fabs can add leading-edge capacity, pointing to reported delays in some announced fab buildouts and to public statements by equipment vendors describing lost China sales. Skeptics counter that Chinese firms have adapted through stockpiling equipment ahead of each rule's effective date, through domestic substitution of controlled tools with homegrown alternatives, and through the multipatterned lithography workaround that allowed SMIC to reach 7-nanometer-class production without EUV equipment. Some economists who have modeled the policy's effects argue that export controls of this kind tend to accelerate a target country's investment in indigenous substitutes over the medium term, even as they constrain capability in the near term, a dynamic that complicates any simple assessment of whether the rules have durably slowed China's advanced-node ambitions or merely reshaped the path by which those ambitions are pursued. Others note that the controls have imposed clear, measurable costs on the Chinese semiconductor sector in the form of higher capital expenditure per unit of output, even if those costs have not yet been sufficient to halt progress entirely. The Bureau of Industry and Security has signaled that further rule updates remain likely as officials continue to monitor how the restricted technologies are used and re-routed.",
+      "content_hash": "a2648a78ad74085e6d199a484f0e7c8e8740b59629eb6eda6a39b09be75ee56a"
     }
   ],
   "claims": [
@@ -174,7 +186,9 @@
       "subject_ids": [
         "ent:china",
         "ent:united-states"
-      ]
+      ],
+      "support": 0.625,
+      "support_method": "jev"
     },
     {
       "id": "clm:controls-accelerate-indigenous-substitution",
@@ -182,7 +196,9 @@
       "kind": "hypothesis",
       "subject_ids": [
         "ent:china"
-      ]
+      ],
+      "support": 0.75,
+      "support_method": "jev"
     },
     {
       "id": "clm:duv-multipatterning-sustains-7nm-workaround",
@@ -191,7 +207,9 @@
       "subject_ids": [
         "ent:china",
         "ent:duv-multipatterning"
-      ]
+      ],
+      "support": 0.8,
+      "support_method": "jev"
     },
     {
       "id": "clm:smic-achieved-7nm-class-node-2023",
@@ -200,7 +218,9 @@
       "subject_ids": [
         "ent:smic",
         "evt:huawei-mate-60-launch-2023"
-      ]
+      ],
+      "support": 1.0,
+      "support_method": "jev"
     },
     {
       "id": "clm:bis-issued-three-rules-2022-2024",
@@ -209,7 +229,9 @@
       "subject_ids": [
         "ent:bis",
         "ent:united-states"
-      ]
+      ],
+      "support": 1.0,
+      "support_method": "jev"
     },
     {
       "id": "clm:asml-euv-license-denied-2019",
@@ -218,7 +240,9 @@
       "subject_ids": [
         "ent:asml",
         "evt:asml-euv-license-withheld-2019"
-      ]
+      ],
+      "support": 1.0,
+      "support_method": "jev"
     },
     {
       "id": "clm:chinese-fabs-cannot-access-secondhand-euv",
@@ -226,14 +250,16 @@
       "kind": "assumption",
       "subject_ids": [
         "ent:china"
-      ]
+      ],
+      "support": null,
+      "support_method": "none"
     }
   ],
   "evidence": [
     {
       "id": "evd:controls-slowed-fab-buildouts",
       "claim_id": "clm:controls-durably-slow-china",
-      "source_id": "src:wikipedia-united-states-export-controls-on-semiconductors",
+      "source_id": "src:wikipedia:041e4de2d62f779e",
       "stance": "supports",
       "excerpt": "Supporters argue that the controls have measurably slowed the rate at which Chinese fabs can add leading-edge capacity, pointing to reported delays in some announced fab buildouts and to public statements by equipment vendors describing lost China sales.",
       "quality": 0.65
@@ -241,7 +267,7 @@
     {
       "id": "evd:china-adapted-via-stockpiling",
       "claim_id": "clm:controls-durably-slow-china",
-      "source_id": "src:wikipedia-united-states-export-controls-on-semiconductors",
+      "source_id": "src:wikipedia:041e4de2d62f779e",
       "stance": "contradicts",
       "excerpt": "Skeptics counter that Chinese firms have adapted through stockpiling equipment ahead of each rule's effective date, through domestic substitution of controlled tools with homegrown alternatives, and through the multipatterned lithography workaround that allowed SMIC to reach 7-nanometer-class production without EUV equipment.",
       "quality": 0.6
@@ -249,7 +275,7 @@
     {
       "id": "evd:chokepoint-controls-remain-binding",
       "claim_id": "clm:controls-durably-slow-china",
-      "source_id": "src:arxiv-9999-00001v1",
+      "source_id": "src:arxiv:b457a59b56dd11ef",
       "stance": "supports",
       "excerpt": "controls targeting a narrow, monopolized chokepoint tend to remain binding longer than controls targeting a broader technology class with several viable alternative suppliers or process routes",
       "quality": 0.55
@@ -257,7 +283,7 @@
     {
       "id": "evd:duv-reaches-euv-class-density",
       "claim_id": "clm:duv-multipatterning-sustains-7nm-workaround",
-      "source_id": "src:wikipedia-extreme-ultraviolet-lithography",
+      "source_id": "src:wikipedia:28aee3e3337f5c04",
       "stance": "supports",
       "excerpt": "multipatterned DUV can reach feature densities in the same broad class as an early EUV-based node, as demonstrated by SMIC's 7-nanometer-class production",
       "quality": 0.7
@@ -265,7 +291,7 @@
     {
       "id": "evd:multipatterning-viable-narrow-band",
       "claim_id": "clm:duv-multipatterning-sustains-7nm-workaround",
-      "source_id": "src:arxiv-9999-00003v1",
+      "source_id": "src:arxiv:65697ea6b9cc8d14",
       "stance": "supports",
       "excerpt": "multipatterned deep ultraviolet lithography remains a technically viable path to a narrow band of advanced-node geometries, consistent with recent foundry announcements of high-density logic production using this approach",
       "quality": 0.75
@@ -273,7 +299,7 @@
     {
       "id": "evd:multipatterning-cost-unsustainable-at-scale",
       "claim_id": "clm:duv-multipatterning-sustains-7nm-workaround",
-      "source_id": "src:arxiv-9999-00003v1",
+      "source_id": "src:arxiv:65697ea6b9cc8d14",
       "stance": "contradicts",
       "excerpt": "the cost and yield penalties grow to a point where, at our modeled parameters, further node scaling without extreme ultraviolet access becomes difficult to sustain at commercially representative production volumes",
       "quality": 0.8
@@ -281,7 +307,7 @@
     {
       "id": "evd:smic-teardown-7nm-class-node",
       "claim_id": "clm:smic-achieved-7nm-class-node-2023",
-      "source_id": "src:wikipedia-semiconductor-industry-in-china",
+      "source_id": "src:wikipedia:c0d661fe10e6d398",
       "stance": "supports",
       "excerpt": "teardown analysts examining a smartphone processor found evidence that SMIC had produced logic circuitry using a process generation broadly comparable to a 7-nanometer-class node, achieved without EUV equipment by relying instead on repeated exposures with older deep ultraviolet scanners",
       "quality": 0.9
@@ -289,7 +315,7 @@
     {
       "id": "evd:duv-density-matches-smic-node",
       "claim_id": "clm:smic-achieved-7nm-class-node-2023",
-      "source_id": "src:wikipedia-extreme-ultraviolet-lithography",
+      "source_id": "src:wikipedia:28aee3e3337f5c04",
       "stance": "supports",
       "excerpt": "multipatterned DUV can reach feature densities in the same broad class as an early EUV-based node, as demonstrated by SMIC's 7-nanometer-class production",
       "quality": 0.7
@@ -297,7 +323,7 @@
     {
       "id": "evd:bis-2022-rule-details",
       "claim_id": "clm:bis-issued-three-rules-2022-2024",
-      "source_id": "src:wikipedia-united-states-export-controls-on-semiconductors",
+      "source_id": "src:wikipedia:041e4de2d62f779e",
       "stance": "supports",
       "excerpt": "The first major rule, published on October 7, 2022, imposed license requirements on exports to China of logic chips at advanced process nodes, high-bandwidth memory, and the deposition, etch, and lithography tools used to make them.",
       "quality": 0.5
@@ -305,7 +331,7 @@
     {
       "id": "evd:asml-euv-license-denied-2019",
       "claim_id": "clm:asml-euv-license-denied-2019",
-      "source_id": "src:wikipedia-extreme-ultraviolet-lithography",
+      "source_id": "src:wikipedia:28aee3e3337f5c04",
       "stance": "supports",
       "excerpt": "The Dutch government first moved to restrict EUV exports to China in 2019, under diplomatic pressure from Washington, by declining to renew a export license that would have allowed ASML to ship an EUV system to a Chinese customer.",
       "quality": 0.8
@@ -313,7 +339,7 @@
     {
       "id": "evd:domestic-patent-filings-increase",
       "claim_id": "clm:controls-accelerate-indigenous-substitution",
-      "source_id": "src:arxiv-9999-00002v1",
+      "source_id": "src:arxiv:a781fa3f3036193a",
       "stance": "supports",
       "excerpt": "we document a marked increase in domestic patent filings for lithography, etch, and deposition tool subsystems following each successive restriction, alongside a rise in state-directed capital allocated to firms working on these subsystems",
       "quality": 0.6
@@ -321,7 +347,7 @@
     {
       "id": "evd:china-subsidy-tool-ecosystem-growth",
       "claim_id": "clm:controls-accelerate-indigenous-substitution",
-      "source_id": "src:wikipedia-semiconductor-industry-in-china",
+      "source_id": "src:wikipedia:c0d661fe10e6d398",
       "stance": "supports",
       "excerpt": "Proponents of this strategy point to measurable increases in domestic equipment shipments and a growing roster of Chinese-origin lithography, etch, and deposition tool suppliers as evidence that the subsidy program is closing gaps in the supply chain",
       "quality": 0.4
@@ -381,5 +407,68 @@
       "after_id": "evt:bis-rule-update-2024",
       "relation": "before"
     }
-  ]
+  ],
+  "gate_log": [
+    {
+      "gate": "relevance_filter",
+      "status": "ok",
+      "detail": "kept src:arxiv:65697ea6b9cc8d14: relevant=0.85 injection=0.02"
+    },
+    {
+      "gate": "relevance_filter",
+      "status": "ok",
+      "detail": "kept src:arxiv:a781fa3f3036193a: relevant=0.89 injection=0.02"
+    },
+    {
+      "gate": "relevance_filter",
+      "status": "ok",
+      "detail": "kept src:arxiv:b457a59b56dd11ef: relevant=0.91 injection=0.02"
+    },
+    {
+      "gate": "relevance_filter",
+      "status": "ok",
+      "detail": "kept src:wikipedia:28aee3e3337f5c04: relevant=0.88 injection=0.02"
+    },
+    {
+      "gate": "relevance_filter",
+      "status": "ok",
+      "detail": "kept src:wikipedia:c0d661fe10e6d398: relevant=0.94 injection=0.02"
+    },
+    {
+      "gate": "relevance_filter",
+      "status": "ok",
+      "detail": "kept src:wikipedia:041e4de2d62f779e: relevant=0.96 injection=0.02"
+    },
+    {
+      "gate": "claim_support",
+      "status": "ok",
+      "detail": "clm:controls-durably-slow-china: score=2.50 support=0.62"
+    },
+    {
+      "gate": "claim_support",
+      "status": "ok",
+      "detail": "clm:controls-accelerate-indigenous-substitution: score=3.00 support=0.75"
+    },
+    {
+      "gate": "claim_support",
+      "status": "ok",
+      "detail": "clm:duv-multipatterning-sustains-7nm-workaround: score=3.20 support=0.80"
+    },
+    {
+      "gate": "claim_support",
+      "status": "ok",
+      "detail": "clm:smic-achieved-7nm-class-node-2023: score=4.00 support=1.00"
+    },
+    {
+      "gate": "claim_support",
+      "status": "ok",
+      "detail": "clm:bis-issued-three-rules-2022-2024: score=4.00 support=1.00"
+    },
+    {
+      "gate": "claim_support",
+      "status": "ok",
+      "detail": "clm:asml-euv-license-denied-2019: score=4.00 support=1.00"
+    }
+  ],
+  "dropped_sources": []
 }

@@ -19,7 +19,7 @@ class SourceDocument:
     """
 
     id: str
-    provider: Literal["wikipedia", "arxiv"]
+    provider: Literal["wikipedia", "arxiv", "asknews_news", "asknews_wiki"]
     title: str
     url: str
     published: str

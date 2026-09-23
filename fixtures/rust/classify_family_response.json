@@ -1,0 +1,10 @@
+{
+  "decision": "matched",
+  "family_id": "fam:ecb-rate-decisions",
+  "probability": 0.83,
+  "jev_confidence": 0.71,
+  "method": "jev",
+  "gate_log": [
+    {"gate": "family", "status": "ok", "detail": "1 candidate scored via jev"}
+  ]
+}

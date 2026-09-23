@@ -1,0 +1,231 @@
+{
+  "Semiconductor industry in China": {
+    "relevant": {
+      "type": "noul",
+      "noul": 0.94
+    },
+    "injection": {
+      "type": "noul",
+      "noul": 0.02
+    }
+  },
+  "United States export controls on semiconductors": {
+    "relevant": {
+      "type": "noul",
+      "noul": 0.96
+    },
+    "injection": {
+      "type": "noul",
+      "noul": 0.02
+    }
+  },
+  "Extreme ultraviolet lithography": {
+    "relevant": {
+      "type": "noul",
+      "noul": 0.88
+    },
+    "injection": {
+      "type": "noul",
+      "noul": 0.02
+    }
+  },
+  "Modeling the Durability of Technology Export Controls: A Framework for Advanced Manufacturing Sectors": {
+    "relevant": {
+      "type": "noul",
+      "noul": 0.91
+    },
+    "injection": {
+      "type": "noul",
+      "noul": 0.02
+    }
+  },
+  "Domestic Substitution Dynamics Under Sanction Pressure: Evidence from the Semiconductor Equipment Sector": {
+    "relevant": {
+      "type": "noul",
+      "noul": 0.89
+    },
+    "injection": {
+      "type": "noul",
+      "noul": 0.02
+    }
+  },
+  "Cost Scaling of Multipatterned Deep Ultraviolet Lithography at Advanced Logic Nodes": {
+    "relevant": {
+      "type": "noul",
+      "noul": 0.85
+    },
+    "injection": {
+      "type": "noul",
+      "noul": 0.02
+    }
+  },
+  "Export controls durably slow China's access to advanced semiconductor manufacturing capability, rather than merely delaying it.": {
+    "support": {
+      "type": "score",
+      "score": 2.5,
+      "legend": {
+        "0": "contradicted by the excerpts",
+        "1": "not addressed by the excerpts",
+        "2": "weakly or indirectly supported",
+        "3": "directly supported by one excerpt",
+        "4": "directly supported by several independent excerpts"
+      },
+      "probabilities": {
+        "0": 0.0,
+        "1": 0.0,
+        "2": 0.5,
+        "3": 0.5,
+        "4": 0.0
+      },
+      "confidence": 0.8
+    }
+  },
+  "Export controls accelerate Chinese investment in indigenous semiconductor equipment and process substitutes, narrowing the capability gap over time.": {
+    "support": {
+      "type": "score",
+      "score": 3.0,
+      "legend": {
+        "0": "contradicted by the excerpts",
+        "1": "not addressed by the excerpts",
+        "2": "weakly or indirectly supported",
+        "3": "directly supported by one excerpt",
+        "4": "directly supported by several independent excerpts"
+      },
+      "probabilities": {
+        "0": 0.0,
+        "1": 0.0,
+        "2": 0.0,
+        "3": 1.0,
+        "4": 0.0
+      },
+      "confidence": 0.8
+    }
+  },
+  "Multipatterned deep ultraviolet lithography can sustain a 7-nanometer-class manufacturing workaround for China's fabs, despite its high per-wafer cost.": {
+    "support": {
+      "type": "score",
+      "score": 3.2,
+      "legend": {
+        "0": "contradicted by the excerpts",
+        "1": "not addressed by the excerpts",
+        "2": "weakly or indirectly supported",
+        "3": "directly supported by one excerpt",
+        "4": "directly supported by several independent excerpts"
+      },
+      "probabilities": {
+        "0": 0.0,
+        "1": 0.0,
+        "2": 0.0,
+        "3": 0.8,
+        "4": 0.2
+      },
+      "confidence": 0.8
+    }
+  },
+  "SMIC produced logic chips on a process generation broadly comparable to a 7-nanometer-class node without EUV lithography, as demonstrated by the chip found in the Huawei Mate 60 Pro.": {
+    "support": {
+      "type": "score",
+      "score": 4.0,
+      "legend": {
+        "0": "contradicted by the excerpts",
+        "1": "not addressed by the excerpts",
+        "2": "weakly or indirectly supported",
+        "3": "directly supported by one excerpt",
+        "4": "directly supported by several independent excerpts"
+      },
+      "probabilities": {
+        "0": 0.0,
+        "1": 0.0,
+        "2": 0.0,
+        "3": 0.0,
+        "4": 1.0
+      },
+      "confidence": 0.8
+    }
+  },
+  "The Bureau of Industry and Security issued three major semiconductor export control rules between October 2022 and December 2024.": {
+    "support": {
+      "type": "score",
+      "score": 4.0,
+      "legend": {
+        "0": "contradicted by the excerpts",
+        "1": "not addressed by the excerpts",
+        "2": "weakly or indirectly supported",
+        "3": "directly supported by one excerpt",
+        "4": "directly supported by several independent excerpts"
+      },
+      "probabilities": {
+        "0": 0.0,
+        "1": 0.0,
+        "2": 0.0,
+        "3": 0.0,
+        "4": 1.0
+      },
+      "confidence": 0.8
+    }
+  },
+  "The Dutch government declined to renew ASML's export license for an EUV shipment to China in 2019.": {
+    "support": {
+      "type": "score",
+      "score": 4.0,
+      "legend": {
+        "0": "contradicted by the excerpts",
+        "1": "not addressed by the excerpts",
+        "2": "weakly or indirectly supported",
+        "3": "directly supported by one excerpt",
+        "4": "directly supported by several independent excerpts"
+      },
+      "probabilities": {
+        "0": 0.0,
+        "1": 0.0,
+        "2": 0.0,
+        "3": 0.0,
+        "4": 1.0
+      },
+      "confidence": 0.8
+    }
+  },
+  "Chinese fabs cannot obtain secondhand or resold EUV systems through third-party intermediaries to bypass direct export restrictions.": {
+    "support": {
+      "type": "score",
+      "score": 1.5,
+      "legend": {
+        "0": "contradicted by the excerpts",
+        "1": "not addressed by the excerpts",
+        "2": "weakly or indirectly supported",
+        "3": "directly supported by one excerpt",
+        "4": "directly supported by several independent excerpts"
+      },
+      "probabilities": {
+        "0": 0.0,
+        "1": 0.5,
+        "2": 0.5,
+        "3": 0.0,
+        "4": 0.0
+      },
+      "confidence": 0.8
+    }
+  },
+  "Will the ECB cut its deposit rate at the October 2026 meeting?": {
+    "family": {
+      "type": "choice",
+      "choice": "fam:ecb-rate-decisions",
+      "probabilities": {
+        "fam:ecb-rate-decisions": 0.83,
+        "none": 0.17
+      },
+      "confidence": 0.71
+    }
+  },
+  "Will Brent crude settle above $90 in December 2026?": {
+    "family": {
+      "type": "choice",
+      "choice": "none",
+      "probabilities": {
+        "fam:ecb-rate-decisions": 0.21,
+        "none": 0.79
+      },
+      "confidence": 0.65
+    }
+  }
+}

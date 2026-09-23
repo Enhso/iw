@@ -45,6 +45,7 @@ async fn main() -> anyhow::Result<()> {
         python_dir: config.python_dir.clone(),
         fixture_dir: config.fixture_dir.clone(),
         timeout: config.worker_timeout,
+        worker_cmd: config.worker_cmd.clone(),
     };
 
     let state = AppState {

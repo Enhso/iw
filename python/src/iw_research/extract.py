@@ -1,7 +1,7 @@
 """LLM-driven knowledge-graph extraction from fetched source documents."""
 
 from .llm import Completer
-from .schema import ExtractionPayload, Source
+from .schema import ExtractionPayload, Source, content_sha256
 from .sources import SourceDocument
 
 SYSTEM_PROMPT = """You are an intelligence analyst extracting a structured knowledge \
@@ -93,11 +93,13 @@ def extract(
             provider=doc.provider,
             published=doc.published,
             retrieved_at=doc.retrieved_at,
+            content=doc.text,
+            content_hash=content_sha256(doc.text),
         )
         for doc in documents
     ]
     normalized_payload = ExtractionPayload.from_untrusted(
-        {**raw, "schema_version": 1, "question": question, "sources": sources}
+        {**raw, "schema_version": 2, "question": question, "sources": sources}
     )
     normalized_payload.check_integrity()
     return normalized_payload

@@ -1,0 +1,26 @@
+{
+  "as_dicts": [
+    {
+      "article_url": "https://news.example.com/export-controls-update",
+      "eng_title": "Latest update on chip export controls",
+      "summary": "A short summary of the update.",
+      "full_text": "The full article text about export controls and semiconductor policy updates.",
+      "pub_date": "2026-09-01T12:00:00Z",
+      "source_id": "example-news"
+    },
+    {
+      "article_url": "https://news.example.com/duplicate-url",
+      "eng_title": "Duplicate check article",
+      "summary": "Summary only, no content field.",
+      "pub_date": "2026-08-15T09:30:00Z",
+      "source_id": "example-news-2"
+    },
+    {
+      "article_url": "https://news.example.com/duplicate-url",
+      "eng_title": "This duplicate should be dropped",
+      "summary": "Should not appear because the URL is a duplicate.",
+      "pub_date": "2026-08-16T09:30:00Z",
+      "source_id": "example-news-3"
+    }
+  ]
+}

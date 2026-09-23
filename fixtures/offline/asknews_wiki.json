@@ -1,0 +1,14 @@
+{
+  "documents": [
+    {
+      "title": "Export control (semiconductor policy)",
+      "url": "https://wiki.example.com/export-control",
+      "content": "Wiki content about export control policy."
+    },
+    {
+      "title": "No content field test",
+      "url": "https://wiki.example.com/summary-only",
+      "summary": "Only a summary is present here."
+    }
+  ]
+}

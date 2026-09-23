@@ -7,7 +7,13 @@ import orjson
 import pytest
 from pytest_httpx import HTTPXMock
 
-from iw_research.llm import ChatClient, FixtureChatClient, LlmError, client_from_env
+from iw_research.llm import (
+    ChatClient,
+    FallbackChatClient,
+    FixtureChatClient,
+    LlmError,
+    client_from_env,
+)
 
 BASE_URL = "https://example.com/v1"
 
@@ -115,3 +121,72 @@ def test_fixture_chat_client_returns_file_content_regardless_of_input(
     client = FixtureChatClient(path)
     assert client.complete_json("ignored", "also ignored") == {"hello": "world"}
     assert client.complete_json("different", "again") == {"hello": "world"}
+
+
+def test_client_from_env_returns_fallback_chat_client_for_comma_separated_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "k")
+    monkeypatch.setenv("LLM_MODEL", "google/gemma-4-31b-it:free, openai/gpt-6-luna")
+    client = client_from_env()
+    assert isinstance(client, FallbackChatClient)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic/claude-opus-4",
+        "anthropic/claude-sonnet-5",
+        "anthropic/claude-fable-5-1",
+        "openai/gpt-6-astra",
+        "openai/gpt-6-sol",
+        "openai/gpt-5.5-turbo",
+        "some-vendor/model-pro",
+    ],
+)
+def test_client_from_env_refuses_frontier_models_in_the_chain(
+    model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "k")
+    monkeypatch.setenv("LLM_MODEL", f"google/gemma-4-31b-it:free,{model}")
+    with pytest.raises(LlmError) as exc_info:
+        client_from_env()
+    assert model in str(exc_info.value)
+
+
+def test_fallback_chat_client_tries_next_model_on_failure(
+    httpx_mock: HTTPXMock,
+) -> None:
+    # pytest-httpx serves matching responses in registration order, so the
+    # first request (from `failing`) consumes the 500 and the second (from
+    # `succeeding`) gets the JSON response.
+    httpx_mock.add_response(url=f"{BASE_URL}/chat/completions", status_code=500)
+    httpx_mock.add_response(
+        url=f"{BASE_URL}/chat/completions",
+        json={"choices": [{"message": {"content": "{}"}}]},
+    )
+    failing = ChatClient(base_url=BASE_URL, api_key="k", model="m1")
+    succeeding = ChatClient(base_url=BASE_URL, api_key="k", model="m2")
+    chain = FallbackChatClient([failing, succeeding])
+    assert chain.complete_json("sys", "user") == {}
+
+
+def test_fallback_chat_client_raises_last_error_when_every_model_fails(
+    httpx_mock: HTTPXMock,
+) -> None:
+    httpx_mock.add_response(
+        url=f"{BASE_URL}/chat/completions", status_code=500, is_reusable=True
+    )
+    chain = FallbackChatClient(
+        [
+            ChatClient(base_url=BASE_URL, api_key="k", model="m1"),
+            ChatClient(base_url=BASE_URL, api_key="k", model="m2"),
+        ]
+    )
+    with pytest.raises(LlmError):
+        chain.complete_json("sys", "user")
+
+
+def test_fallback_chat_client_rejects_empty_chain() -> None:
+    with pytest.raises(LlmError):
+        FallbackChatClient([])

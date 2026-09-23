@@ -2,7 +2,7 @@
 
 import polars as pl
 
-from .schema import Source
+from .schema import Source, content_sha256
 from .sources import SourceDocument
 
 MAX_DOC_CHARS = 6000
@@ -78,7 +78,8 @@ def to_sources(frame: pl.DataFrame) -> list[Source]:
         frame: A frame produced by `normalize`.
 
     Returns:
-        One `Source` per row, in frame order.
+        One `Source` per row, in frame order. `content` is the row's
+        (normalized, truncated) `text`, and `content_hash` its sha256.
     """
     return [
         Source(
@@ -88,6 +89,8 @@ def to_sources(frame: pl.DataFrame) -> list[Source]:
             provider=row["provider"],
             published=row["published"],
             retrieved_at=row["retrieved_at"],
+            content=row["text"],
+            content_hash=content_sha256(row["text"]),
         )
         for row in frame.iter_rows(named=True)
     ]

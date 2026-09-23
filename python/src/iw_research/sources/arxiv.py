@@ -6,7 +6,7 @@ from pathlib import Path
 
 import httpx
 
-from ..schema import make_id
+from ..schema import make_source_id
 from . import SourceDocument
 
 logger = logging.getLogger(__name__)
@@ -51,10 +51,9 @@ def parse_atom(content: bytes, retrieved_at: str) -> list[SourceDocument]:
         if published_el is not None and published_el.text:
             published = published_el.text.strip()[:10]
 
-        last_segment = url.rstrip("/").rsplit("/", 1)[-1]
         documents.append(
             SourceDocument(
-                id=make_id("src", f"arxiv-{last_segment}"),
+                id=make_source_id("arxiv", url),
                 provider="arxiv",
                 title=title,
                 url=url,

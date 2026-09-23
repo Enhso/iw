@@ -11,6 +11,7 @@ from iw_research.schema import (
     Evidence,
     ExtractionPayload,
     Source,
+    content_sha256,
     make_id,
     slugify,
 )
@@ -58,6 +59,8 @@ def _minimal_payload(**overrides: object) -> ExtractionPayload:
                 "provider": "wikipedia",
                 "published": "",
                 "retrieved_at": "2026-09-14T00:00:00Z",
+                "content": "Some content.",
+                "content_hash": content_sha256("Some content."),
             }
         ],
         "claims": [
@@ -265,6 +268,22 @@ def test_source_rejects_bad_enum_provider() -> None:
             provider="bing",  # type: ignore[arg-type]
             published="",
             retrieved_at="2026-09-14T00:00:00Z",
+            content="c",
+            content_hash=content_sha256("c"),
+        )
+
+
+def test_source_rejects_mismatched_content_hash() -> None:
+    with pytest.raises(ValidationError, match="content_hash"):
+        Source(
+            id="src:x",
+            title="T",
+            url="https://example.com",
+            provider="wikipedia",
+            published="",
+            retrieved_at="2026-09-14T00:00:00Z",
+            content="c",
+            content_hash="0" * 64,
         )
 
 

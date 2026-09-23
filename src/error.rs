@@ -15,6 +15,9 @@ pub enum AppError {
     /// The request payload failed `ExtractionPayload::validate`.
     #[error("invalid payload: {0}")]
     InvalidPayload(#[from] crate::model::PayloadError),
+    /// A query parameter (e.g. `as_of`) was malformed.
+    #[error("invalid query: {0}")]
+    InvalidQuery(String),
     /// The mnestic-backed graph store returned an error.
     #[error("graph store error: {0}")]
     Store(String),
@@ -53,7 +56,9 @@ impl IntoResponse for AppError {
     /// detailed because they are user-facing.
     fn into_response(self) -> Response {
         let status = match &self {
-            AppError::InvalidPayload(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            AppError::InvalidPayload(_) | AppError::InvalidQuery(_) => {
+                StatusCode::UNPROCESSABLE_ENTITY
+            }
             AppError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::Research(_) => StatusCode::BAD_GATEWAY,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
@@ -62,7 +67,9 @@ impl IntoResponse for AppError {
             tracing::error!(error = %self, "request failed");
         }
         let message = match &self {
-            AppError::InvalidPayload(_) | AppError::NotFound(_) => self.to_string(),
+            AppError::InvalidPayload(_) | AppError::InvalidQuery(_) | AppError::NotFound(_) => {
+                self.to_string()
+            }
             AppError::Store(_) => "graph store error".to_string(),
             AppError::Research(_) => "research worker error".to_string(),
         };

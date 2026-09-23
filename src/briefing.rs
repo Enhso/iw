@@ -75,38 +75,41 @@ pub struct BriefingContext {
 }
 
 /// Gathers every graph and vector query result needed to render a
-/// [`Briefing`] for `dossier_id`.
+/// [`Briefing`] for `dossier_id` as of `as_of` (an RFC 3339 UTC string, or
+/// [`crate::store::AS_OF_NOW`] for current state).
 ///
 /// # Errors
 /// Returns [`StoreError`] if any underlying [`GraphStore`] query fails.
 ///
 /// # Returns
-/// `Ok(None)` if no dossier with `dossier_id` has been ingested (i.e.
-/// [`GraphStore::dossier_question`] returns `None`).
+/// `Ok(None)` if `dossier_id` did not exist yet as of `as_of` (i.e.
+/// [`GraphStore::dossier_meta`] returns `None`) — either it has never been
+/// ingested, or `as_of` predates its first ingest.
 pub fn build_context(
     store: &GraphStore,
     dossier_id: &str,
+    as_of: &str,
 ) -> Result<Option<BriefingContext>, StoreError> {
-    let Some(question) = store.dossier_question(dossier_id)? else {
+    let Some((question, _created_at)) = store.dossier_meta(dossier_id, as_of)? else {
         return Ok(None);
     };
 
     Ok(Some(BriefingContext {
         dossier_id: dossier_id.to_string(),
-        entities: store.entities(dossier_id)?,
-        events: store.events(dossier_id)?,
-        event_actors: store.event_actors(dossier_id)?,
-        sources: store.sources(dossier_id)?,
-        claim_subjects: store.claim_subjects(dossier_id)?,
-        evidence: store.evidence(dossier_id)?,
-        claims: store.claims_with_stance(dossier_id)?,
-        causal_links: store.causal_links(dossier_id)?,
-        chains: store.causal_chains(dossier_id)?,
-        cruxes: store.cruxes(dossier_id)?,
-        consensus: store.consensus(dossier_id)?,
-        temporal: store.temporal_relations(dossier_id)?,
-        similar_evidence: store.similar_evidence(&question)?,
-        similar_claims: store.similar_claims(&question)?,
+        entities: store.entities(dossier_id, as_of)?,
+        events: store.events(dossier_id, as_of)?,
+        event_actors: store.event_actors(dossier_id, as_of)?,
+        sources: store.sources(dossier_id, as_of)?,
+        claim_subjects: store.claim_subjects(dossier_id, as_of)?,
+        evidence: store.evidence(dossier_id, as_of)?,
+        claims: store.claims_with_stance(dossier_id, as_of)?,
+        causal_links: store.causal_links(dossier_id, as_of)?,
+        chains: store.causal_chains(dossier_id, as_of)?,
+        cruxes: store.cruxes(dossier_id, as_of)?,
+        consensus: store.consensus(dossier_id, as_of)?,
+        temporal: store.temporal_relations(dossier_id, as_of)?,
+        similar_evidence: store.similar_evidence(&question, as_of)?,
+        similar_claims: store.similar_claims(&question, as_of)?,
         question,
     }))
 }
@@ -735,14 +738,31 @@ fn render_source_appendix(ctx: &BriefingContext) -> String {
 mod tests {
     use super::*;
     use crate::model::{
-        dossier_id_for, CausalLink, Claim, Entity, Event, Evidence, ExtractionPayload, Source,
-        TemporalRelation,
+        dossier_id_for, sha256_hex, CausalLink, Claim, Entity, Event, Evidence, ExtractionPayload,
+        Source, TemporalRelation,
     };
-    use crate::store::GraphStore;
+    use crate::store::{GraphStore, AS_OF_NOW};
+
+    /// Builds a v2 [`Source`] for `title`/`url` whose id and `content_hash`
+    /// are correctly derived from `content`, so ad hoc test payloads don't
+    /// have to reproduce that arithmetic inline.
+    fn make_source(provider: &str, title: &str, url: &str, content: &str) -> Source {
+        let url_hash = &sha256_hex(url)[..16];
+        Source {
+            id: format!("src:{provider}:{url_hash}"),
+            title: title.to_string(),
+            url: url.to_string(),
+            provider: provider.to_string(),
+            published: String::new(),
+            retrieved_at: CREATED_AT.to_string(),
+            content_hash: sha256_hex(content),
+            content: content.to_string(),
+        }
+    }
 
     const FIXTURE: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/fixtures/payload/semiconductor.json"
+        "/fixtures/rust/semiconductor_v2.json"
     ));
     const CREATED_AT: &str = "2026-09-14T00:00:00Z";
 
@@ -756,8 +776,10 @@ mod tests {
         let payload = fixture_payload();
         let store = GraphStore::open_memory().expect("open store");
         store.init_schema().expect("init schema");
-        let report = store.ingest(&payload, CREATED_AT).expect("ingest fixture");
-        let ctx = build_context(&store, &report.dossier_id)
+        let report = store
+            .ingest(&payload, None, CREATED_AT)
+            .expect("ingest fixture");
+        let ctx = build_context(&store, &report.dossier_id, AS_OF_NOW)
             .expect("build_context")
             .expect("dossier exists");
         let briefing = render(&ctx);
@@ -833,11 +855,13 @@ mod tests {
         let payload = fixture_payload();
         let store = GraphStore::open_memory().expect("open store");
         store.init_schema().expect("init schema");
-        let report = store.ingest(&payload, CREATED_AT).expect("ingest fixture");
-        let cruxes = store.cruxes(&report.dossier_id).expect("cruxes");
+        let report = store
+            .ingest(&payload, None, CREATED_AT)
+            .expect("ingest fixture");
+        let cruxes = store.cruxes(&report.dossier_id, AS_OF_NOW).expect("cruxes");
         assert!(!cruxes.is_empty());
 
-        let ctx = build_context(&store, &report.dossier_id)
+        let ctx = build_context(&store, &report.dossier_id, AS_OF_NOW)
             .expect("build_context")
             .expect("dossier exists");
         let briefing = render(&ctx);
@@ -973,14 +997,14 @@ semiconductor manufacturing capability, rather than merely delaying it.";
     fn build_context_on_unknown_dossier_returns_none() {
         let store = GraphStore::open_memory().expect("open store");
         store.init_schema().expect("init schema");
-        let result = build_context(&store, "dos:does-not-exist").expect("build_context");
+        let result = build_context(&store, "dos:does-not-exist", AS_OF_NOW).expect("build_context");
         assert!(result.is_none());
     }
 
     #[test]
     fn minimal_dossier_still_renders_eleven_non_empty_sections() {
         let payload = ExtractionPayload {
-            schema_version: 1,
+            schema_version: 2,
             question: "Does a minimal dossier still render a full briefing?".to_string(),
             entities: vec![Entity {
                 id: "ent:only-one".to_string(),
@@ -994,15 +1018,17 @@ semiconductor manufacturing capability, rather than merely delaying it.";
             evidence: vec![],
             causal_links: vec![],
             temporal_relations: vec![],
+            gate_log: vec![],
+            dropped_sources: vec![],
         };
         let store = GraphStore::open_memory().expect("open store");
         store.init_schema().expect("init schema");
         store
-            .ingest(&payload, CREATED_AT)
+            .ingest(&payload, None, CREATED_AT)
             .expect("ingest minimal payload");
 
         let dossier_id = dossier_id_for(&payload.question);
-        let ctx = build_context(&store, &dossier_id)
+        let ctx = build_context(&store, &dossier_id, AS_OF_NOW)
             .expect("build_context")
             .expect("dossier exists");
         let briefing = render(&ctx);
@@ -1050,14 +1076,12 @@ semiconductor manufacturing capability, rather than merely delaying it.";
             kind: "organization".to_string(),
             description: "A minimal handcrafted entity.".to_string(),
         };
-        let source = Source {
-            id: "src:only-one".to_string(),
-            title: "Only Source".to_string(),
-            url: "https://example.com/only-source".to_string(),
-            provider: "wikipedia".to_string(),
-            published: String::new(),
-            retrieved_at: CREATED_AT.to_string(),
-        };
+        let source = make_source(
+            "wikipedia",
+            "Only Source",
+            "https://example.com/only-source",
+            "Only source content for the contested-claim-count test.",
+        );
 
         let mut claims = Vec::new();
         let mut evidence = Vec::new();
@@ -1068,6 +1092,8 @@ semiconductor manufacturing capability, rather than merely delaying it.";
                 text: format!("Contested claim number {n}."),
                 kind: "hypothesis".to_string(),
                 subject_ids: vec![entity.id.clone()],
+                support: Some(0.5),
+                support_method: "jev".to_string(),
             });
             evidence.push(Evidence {
                 id: format!("evd:supports-{n}"),
@@ -1088,7 +1114,7 @@ semiconductor manufacturing capability, rather than merely delaying it.";
         }
 
         let payload = ExtractionPayload {
-            schema_version: 1,
+            schema_version: 2,
             question: "Are there more than 3 contested claims in this dossier?".to_string(),
             entities: vec![entity],
             events: vec![],
@@ -1097,16 +1123,20 @@ semiconductor manufacturing capability, rather than merely delaying it.";
             evidence,
             causal_links: vec![],
             temporal_relations: vec![],
+            gate_log: vec![],
+            dropped_sources: vec![],
         };
 
         let store = GraphStore::open_memory().expect("open store");
         store.init_schema().expect("init schema");
-        let report = store.ingest(&payload, CREATED_AT).expect("ingest payload");
+        let report = store
+            .ingest(&payload, None, CREATED_AT)
+            .expect("ingest payload");
 
-        let cruxes = store.cruxes(&report.dossier_id).expect("cruxes");
+        let cruxes = store.cruxes(&report.dossier_id, AS_OF_NOW).expect("cruxes");
         assert_eq!(cruxes.len(), 3, "CRUXES query should cap at 3");
 
-        let ctx = build_context(&store, &report.dossier_id)
+        let ctx = build_context(&store, &report.dossier_id, AS_OF_NOW)
             .expect("build_context")
             .expect("dossier exists");
         let briefing = render(&ctx);
@@ -1148,14 +1178,22 @@ semiconductor manufacturing capability, rather than merely delaying it.";
         store.init_schema().expect("init schema");
 
         let payload_a = fixture_payload();
-        let report_a = store.ingest(&payload_a, CREATED_AT).expect("ingest A");
-        let ctx_before = build_context(&store, &report_a.dossier_id)
+        let report_a = store
+            .ingest(&payload_a, None, CREATED_AT)
+            .expect("ingest A");
+        let ctx_before = build_context(&store, &report_a.dossier_id, AS_OF_NOW)
             .expect("build_context before B")
             .expect("dossier A exists");
         let briefing_before = render(&ctx_before);
 
+        let b_only_source = make_source(
+            "wikipedia",
+            "B Only Source",
+            "https://example.com/b-only-source",
+            "Dossier B's own source content for the cross-dossier leak test.",
+        );
         let payload_b = ExtractionPayload {
-            schema_version: 1,
+            schema_version: 2,
             question: "Did the October 2022 rule directly cause the B-only claim in this \
                         handcrafted dossier?"
                 .to_string(),
@@ -1186,14 +1224,7 @@ semiconductor manufacturing capability, rather than merely delaying it.";
                     actor_ids: vec![],
                 },
             ],
-            sources: vec![Source {
-                id: "src:b-only-source".to_string(),
-                title: "B Only Source".to_string(),
-                url: "https://example.com/b-only-source".to_string(),
-                provider: "wikipedia".to_string(),
-                published: String::new(),
-                retrieved_at: CREATED_AT.to_string(),
-            }],
+            sources: vec![b_only_source.clone()],
             claims: vec![Claim {
                 id: "clm:controls-durably-slow-china".to_string(),
                 text: "Export controls durably slow China's access to advanced semiconductor \
@@ -1201,11 +1232,13 @@ semiconductor manufacturing capability, rather than merely delaying it.";
                     .to_string(),
                 kind: "hypothesis".to_string(),
                 subject_ids: vec!["ent:b-only-actor".to_string()],
+                support: Some(0.3),
+                support_method: "jev".to_string(),
             }],
             evidence: vec![Evidence {
                 id: "evd:b-only-evidence".to_string(),
                 claim_id: "clm:controls-durably-slow-china".to_string(),
-                source_id: "src:b-only-source".to_string(),
+                source_id: b_only_source.id.clone(),
                 stance: "contradicts".to_string(),
                 excerpt: payload_a.question.clone(),
                 quality: 0.95,
@@ -1223,11 +1256,15 @@ semiconductor manufacturing capability, rather than merely delaying it.";
                 after_id: "evt:b-only-event".to_string(),
                 relation: "before".to_string(),
             }],
+            gate_log: vec![],
+            dropped_sources: vec![],
         };
         payload_b.validate().expect("payload B is valid");
-        store.ingest(&payload_b, CREATED_AT).expect("ingest B");
+        store
+            .ingest(&payload_b, None, CREATED_AT)
+            .expect("ingest B");
 
-        let ctx_after = build_context(&store, &report_a.dossier_id)
+        let ctx_after = build_context(&store, &report_a.dossier_id, AS_OF_NOW)
             .expect("build_context after B")
             .expect("dossier A still exists");
         let briefing_after = render(&ctx_after);

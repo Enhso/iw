@@ -32,6 +32,14 @@ pub struct Config {
     /// Fixture directory passed to the research worker in offline mode
     /// (`IW_FIXTURE_DIR`, unset means live mode).
     pub fixture_dir: Option<PathBuf>,
+    /// Overrides the worker command prefix (`IW_WORKER_CMD`, unset means
+    /// `uv run --directory <python_dir> iw-research`). A whitespace-split
+    /// command, e.g. a path to a stub script, that
+    /// [`crate::research::ResearchWorker`] runs in place of `uv`/`python_dir`
+    /// with the subcommand and `--fixture-dir` still appended, so tests can
+    /// exercise the stdin/stdout subcommand protocol without a Python
+    /// environment on `PATH`.
+    pub worker_cmd: Option<Vec<String>>,
     /// Maximum time to wait for the research worker before timing out
     /// (`IW_WORKER_TIMEOUT_SECS`, default `300`).
     pub worker_timeout: Duration,
@@ -101,6 +109,13 @@ impl Config {
 
         let fixture_dir = lookup("IW_FIXTURE_DIR").map(PathBuf::from);
 
+        let worker_cmd = lookup("IW_WORKER_CMD").map(|value| {
+            value
+                .split_whitespace()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        });
+
         let worker_timeout = match lookup("IW_WORKER_TIMEOUT_SECS") {
             Some(value) => {
                 let secs: u64 = value.parse().map_err(|_| ConfigError::InvalidValue {
@@ -119,6 +134,7 @@ impl Config {
             uv_bin,
             python_dir,
             fixture_dir,
+            worker_cmd,
             worker_timeout,
         })
     }
@@ -156,7 +172,18 @@ mod tests {
         assert_eq!(config.uv_bin, PathBuf::from("uv"));
         assert_eq!(config.python_dir, PathBuf::from("python"));
         assert_eq!(config.fixture_dir, None);
+        assert_eq!(config.worker_cmd, None);
         assert_eq!(config.worker_timeout, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn worker_cmd_splits_on_whitespace() {
+        let vars = HashMap::from([("IW_WORKER_CMD", "  /path/to/stub.sh  --flag  ")]);
+        let config = Config::from_lookup(lookup_over(vars)).expect("worker_cmd parses");
+        assert_eq!(
+            config.worker_cmd,
+            Some(vec!["/path/to/stub.sh".to_string(), "--flag".to_string()])
+        );
     }
 
     #[test]

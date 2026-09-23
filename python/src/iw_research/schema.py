@@ -4,12 +4,13 @@ Mirrors the Rust `ExtractionPayload` in `src/model.rs` field-for-field so the
 JSON this worker prints deserializes directly on the Rust side.
 """
 
+import hashlib
 import logging
 import re
 from collections.abc import Mapping
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,13 @@ _SLUG_COLLAPSE_RE = re.compile(r"[^a-z0-9]+")
 _ID_PREFIXES: tuple[str, ...] = ("ent", "evt", "clm", "evd", "src")
 
 _ID_BODY_RE = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*")
+
+# v2 (contracts.md A2): `src:<provider>:<first 16 hex of sha256(url)>`. This is a
+# distinct, narrower shape from the Global Constraint 10 slug grammar above, so it
+# is checked by `is_valid_source_id`/`make_source_id` rather than folded into
+# `is_valid_id`/`make_id` (which stay exactly as Rust's shared contract vectors
+# expect for entities, events, claims, and evidence).
+_SOURCE_ID_RE = re.compile(r"src:[a-z][a-z0-9_]*:[0-9a-f]{16}")
 
 _FORECASTING_RE = re.compile(
     r"\b(probability|probabilities|likelihood|odds)\b"
@@ -115,6 +123,46 @@ def make_id(prefix: str, text: str) -> str:
     return f"{prefix}:{slugify(text)[:60].rstrip('-')}"
 
 
+def is_valid_source_id(value: str) -> bool:
+    """Check `value` against the v2 deterministic source id shape (Item A2).
+
+    Args:
+        value: The candidate source id.
+
+    Returns:
+        True if `value` is `src:<provider>:<16 lowercase hex digits>`, where
+        `provider` is one or more lowercase alphanumeric/underscore
+        characters starting with a letter.
+    """
+    return bool(_SOURCE_ID_RE.fullmatch(value))
+
+
+def content_sha256(content: str) -> str:
+    """Compute the lowercase hex sha256 digest of `content`'s UTF-8 bytes.
+
+    Args:
+        content: The exact source content string.
+
+    Returns:
+        The 64-character lowercase hex sha256 digest.
+    """
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def make_source_id(provider: str, url: str) -> str:
+    """Build a v2 deterministic source id from a provider and url (Item A2).
+
+    Args:
+        provider: The source's provider, e.g. `"wikipedia"`.
+        url: The source document's url.
+
+    Returns:
+        `f"src:{provider}:{first 16 hex digits of sha256(url)}"`.
+    """
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+    return f"src:{provider}:{digest}"
+
+
 class Entity(BaseModel):
     """A named entity, identified by an `ent:` id."""
 
@@ -135,14 +183,31 @@ class Event(BaseModel):
 
 
 class Source(BaseModel):
-    """A citable source document, identified by a `src:` id."""
+    """A citable source document, identified by a `src:` id.
+
+    `content_hash` must equal `content_sha256(content)`; this is enforced on
+    construction so a mismatched pair never survives validation on either
+    side of the contract (Item A2).
+    """
 
     id: str
     title: str
     url: str
-    provider: Literal["wikipedia", "arxiv"]
+    provider: Literal["wikipedia", "arxiv", "asknews_news", "asknews_wiki"]
     published: str
     retrieved_at: str
+    content: str
+    content_hash: str
+
+    @model_validator(mode="after")
+    def _check_content_hash(self) -> "Source":
+        expected = content_sha256(self.content)
+        if self.content_hash != expected:
+            raise ValueError(
+                f"content_hash {self.content_hash!r} does not match "
+                f"sha256(content) {expected!r}"
+            )
+        return self
 
 
 class Claim(BaseModel):
@@ -152,6 +217,8 @@ class Claim(BaseModel):
     text: str
     kind: Literal["hypothesis", "fact", "assumption"]
     subject_ids: list[str] = Field(default_factory=list)
+    support: float | None = Field(default=None, ge=0.0, le=1.0)
+    support_method: Literal["jev", "none"] = "none"
 
 
 class Evidence(BaseModel):
@@ -180,6 +247,22 @@ class TemporalRelation(BaseModel):
     before_id: str
     after_id: str
     relation: Literal["before", "during", "after"]
+
+
+class GateLogEntry(BaseModel):
+    """One Jev gate invocation's outcome (Item A2/B4)."""
+
+    gate: str
+    status: Literal["ok", "failed", "skipped"]
+    detail: str
+
+
+class DroppedSource(BaseModel):
+    """A fetched passage the relevance/injection gate removed (Item A2/B4)."""
+
+    url: str
+    reason: Literal["irrelevant", "injection"]
+    score: float
 
 
 class _HasId(Protocol):
@@ -293,7 +376,7 @@ class ExtractionPayload(BaseModel):
     Mirrors the Rust `ExtractionPayload` in `src/model.rs`.
     """
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     question: str
     entities: list[Entity] = Field(default_factory=list)
     events: list[Event] = Field(default_factory=list)
@@ -302,6 +385,8 @@ class ExtractionPayload(BaseModel):
     evidence: list[Evidence] = Field(default_factory=list)
     causal_links: list[CausalLink] = Field(default_factory=list)
     temporal_relations: list[TemporalRelation] = Field(default_factory=list)
+    gate_log: list[GateLogEntry] = Field(default_factory=list)
+    dropped_sources: list[DroppedSource] = Field(default_factory=list)
 
     @classmethod
     def from_untrusted(cls, raw: Mapping[str, object]) -> "ExtractionPayload":
@@ -314,23 +399,27 @@ class ExtractionPayload(BaseModel):
         and the reason.
 
         Runs, in order: (1) per-item model validation for every list
-        field, dropping items that raise `ValidationError`; (2) id
-        repair for entities, events, sources, claims, and evidence,
-        re-slugifying under each list's own prefix and remapping every
-        `subject_ids`/`actor_ids`/`claim_id`/`source_id`/`cause_id`/
-        `effect_id`/`before_id`/`after_id` reference to match; (3)
-        blanking `occurred_at`/`published` values that are not `""` or
-        `YYYY-MM-DD`; (4) dropping evidence whose `quality` is outside
-        `0.0..=1.0` (including `NaN`); (5) dropping claims and causal
-        links whose `text`/`mechanism` uses forecasting language, since
-        evidence excerpts quote sources verbatim and are exempt; (6)
-        `normalized()`, which drops dangling references and
-        de-duplicates by id.
+        field, dropping items that raise `ValidationError` (this is also
+        where a `Source` with a mismatched `content_hash` is dropped, since
+        that check runs in `Source`'s own validator); (2) id repair for
+        entities, events, claims, and evidence, re-slugifying under each
+        list's own prefix and remapping every `subject_ids`/`actor_ids`/
+        `claim_id`/`source_id`/`cause_id`/`effect_id`/`before_id`/
+        `after_id` reference to match (sources are worker-authored, not
+        LLM-authored, so a source with an invalid v2 id is dropped rather
+        than repaired: there is no slug to repair it into); (3) blanking
+        `occurred_at`/`published` values that are not `""` or `YYYY-MM-DD`;
+        (4) dropping evidence whose `quality` is outside `0.0..=1.0`
+        (including `NaN`); (5) dropping claims and causal links whose
+        `text`/`mechanism` uses forecasting language, since evidence
+        excerpts quote sources verbatim and are exempt; (6) `normalized()`,
+        which drops dangling references and de-duplicates by id.
 
         Args:
             raw: The untrusted payload mapping, e.g. an LLM's parsed JSON
                 response merged with the caller's own `schema_version`,
-                `question`, and `sources` overrides.
+                `question`, `sources`, `gate_log`, and `dropped_sources`
+                overrides.
 
         Returns:
             A normalized `ExtractionPayload` satisfying the same
@@ -346,6 +435,10 @@ class ExtractionPayload(BaseModel):
         )
         temporal_relations = _validate_list(
             "temporal_relations", raw.get("temporal_relations"), TemporalRelation
+        )
+        gate_log = _validate_list("gate_log", raw.get("gate_log"), GateLogEntry)
+        dropped_sources = _validate_list(
+            "dropped_sources", raw.get("dropped_sources"), DroppedSource
         )
 
         remap: dict[str, str] = {}
@@ -364,12 +457,13 @@ class ExtractionPayload(BaseModel):
                 repaired_events.append(event.model_copy(update={"id": new_id}))
         events = repaired_events
 
-        repaired_sources: list[Source] = []
+        valid_sources: list[Source] = []
         for source in sources:
-            new_id = _repair_id("sources", "src", source.id, remap)
-            if new_id is not None:
-                repaired_sources.append(source.model_copy(update={"id": new_id}))
-        sources = repaired_sources
+            if is_valid_source_id(source.id):
+                valid_sources.append(source)
+            else:
+                logger.warning("dropping sources %s: invalid source id", source.id)
+        sources = valid_sources
 
         repaired_claims: list[Claim] = []
         for claim in claims:
@@ -480,7 +574,7 @@ class ExtractionPayload(BaseModel):
         causal_links = non_forecasting_links
 
         payload = cls(
-            schema_version=raw.get("schema_version", 1),  # type: ignore[arg-type]
+            schema_version=raw.get("schema_version", 2),  # type: ignore[arg-type]
             question=raw.get("question", ""),  # type: ignore[arg-type]
             entities=entities,
             events=events,
@@ -489,6 +583,8 @@ class ExtractionPayload(BaseModel):
             evidence=evidence,
             causal_links=causal_links,
             temporal_relations=temporal_relations,
+            gate_log=gate_log,
+            dropped_sources=dropped_sources,
         )
         return payload.normalized()
 

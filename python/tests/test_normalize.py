@@ -1,6 +1,7 @@
 """Tests for iw_research.normalize: cleaning and de-duplicating documents."""
 
 from iw_research.normalize import MAX_DOC_CHARS, normalize, to_documents, to_sources
+from iw_research.schema import content_sha256
 from iw_research.sources import SourceDocument
 
 
@@ -71,6 +72,7 @@ def test_to_sources_builds_source_rows_with_matching_fields() -> None:
             title="A Title",
             provider="arxiv",
             published="2024-01-01",
+            text="Some text.",
         )
     ]
     frame = normalize(docs)
@@ -83,3 +85,5 @@ def test_to_sources_builds_source_rows_with_matching_fields() -> None:
     assert source.provider == "arxiv"
     assert source.published == "2024-01-01"
     assert source.retrieved_at == "2026-09-14T00:00:00Z"
+    assert source.content == "Some text."
+    assert source.content_hash == content_sha256("Some text.")

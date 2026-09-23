@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 import orjson
 
-from ..schema import make_id, slugify
+from ..schema import make_source_id, slugify
 from . import SourceDocument
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ def parse_extract_response(data: dict[str, Any], title: str) -> tuple[str, str]:
 
 def _document_for(title: str, text: str, url: str, retrieved_at: str) -> SourceDocument:
     return SourceDocument(
-        id=make_id("src", f"wikipedia-{title}"),
+        id=make_source_id("wikipedia", url),
         provider="wikipedia",
         title=title,
         url=url,

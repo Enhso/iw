@@ -32,7 +32,7 @@ def test_parse_atom_extracts_fields_and_collapses_whitespace() -> None:
     docs = parse_atom(_ATOM_FEED, RETRIEVED_AT)
     assert len(docs) == 1
     doc = docs[0]
-    assert doc.id == "src:arxiv-9999-00001v1"
+    assert doc.id == "src:arxiv:b457a59b56dd11ef"
     assert doc.provider == "arxiv"
     assert doc.title == "A Test Paper Title"
     assert doc.text == "A summary with extra whitespace."
@@ -72,7 +72,7 @@ def test_search_returns_documents(httpx_mock: HTTPXMock) -> None:
     with httpx.Client() as client:
         docs = search(client, "export controls", 1, RETRIEVED_AT)
     assert len(docs) == 1
-    assert docs[0].id == "src:arxiv-9999-00001v1"
+    assert docs[0].id == "src:arxiv:b457a59b56dd11ef"
 
 
 def test_search_returns_empty_and_logs_on_http_error(
@@ -108,9 +108,9 @@ def test_load_fixture_reuses_the_live_parser(fixture_dir: Path) -> None:
     assert len(docs) == 3
     ids = [doc.id for doc in docs]
     assert ids == [
-        "src:arxiv-9999-00001v1",
-        "src:arxiv-9999-00002v1",
-        "src:arxiv-9999-00003v1",
+        "src:arxiv:b457a59b56dd11ef",
+        "src:arxiv:a781fa3f3036193a",
+        "src:arxiv:65697ea6b9cc8d14",
     ]
     for doc in docs:
         assert doc.provider == "arxiv"
