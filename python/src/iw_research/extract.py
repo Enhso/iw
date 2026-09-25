@@ -1,7 +1,9 @@
 """LLM-driven knowledge-graph extraction from fetched source documents."""
 
+import logging
+
 from .gates import bounded_map
-from .llm import Completer
+from .llm import Completer, LlmError
 from .schema import (
     CausalLink,
     ExtractionPayload,
@@ -10,6 +12,8 @@ from .schema import (
     content_sha256,
 )
 from .sources import SourceDocument
+
+logger = logging.getLogger(__name__)
 
 # ~4 documents per extraction call (contracts.md B4 / build log C2b): a free-tier
 # model's output token limit caps how much JSON one call can return, so a question
@@ -205,6 +209,36 @@ def _merge_payloads(
     return merged.normalized()
 
 
+def _extract_batch_or_error(
+    question: str, batch: list[SourceDocument], completer: Completer, index: int
+) -> ExtractionPayload | LlmError | ValueError:
+    """Run `extract` on one batch, catching its documented exceptions.
+
+    Args:
+        question: The research question to answer.
+        batch: This batch's documents.
+        completer: The chat-completions client (live or fixture-backed).
+        index: This batch's position among `extract_batched`'s batches,
+            used only for the failure log line.
+
+    Returns:
+        The batch's `ExtractionPayload` on success, or the caught
+        `LlmError`/`ValueError` on failure (never raised here, so a
+        `bounded_map` over this function cannot fail the whole call).
+    """
+    try:
+        return extract(question, batch, completer)
+    except (LlmError, ValueError) as exc:
+        logger.warning(
+            "extract_batched: batch %d (%d documents) failed: %s: %s",
+            index,
+            len(batch),
+            type(exc).__name__,
+            exc,
+        )
+        return exc
+
+
 def extract_batched(
     question: str,
     documents: list[SourceDocument],
@@ -220,6 +254,13 @@ def extract_batched(
     (concurrently) gives each batch's material its own output budget; the
     per-batch payloads are then merged and re-normalized by `_merge_payloads`.
 
+    A batch that raises `LlmError` or `ValueError` is logged (batch index,
+    document count, exception class and message -- never document content)
+    and dropped rather than failing the whole call, so one batch's LLM
+    timeout or malformed output does not starve the other batches' claims.
+    The single-batch path (`len(documents) <= batch_size`) is unaffected and
+    still raises on failure.
+
     Args:
         question: The research question to answer.
         documents: The normalized source documents available for extraction.
@@ -227,12 +268,19 @@ def extract_batched(
         batch_size: Maximum documents per `extract` call.
 
     Returns:
-        A single normalized `ExtractionPayload` (see `_merge_payloads`), or
-        the empty payload if `documents` is empty.
+        A single normalized `ExtractionPayload` merging every batch that
+        succeeded (see `_merge_payloads`), or the empty payload if
+        `documents` is empty.
 
     Raises:
-        LlmError: If any batch's completer request or JSON parsing fails.
-        ValueError: If any batch's own `check_integrity` fails.
+        LlmError: If `len(documents) <= batch_size` and the single `extract`
+            call's completer request or JSON parsing fails, or if every
+            batch failed with `LlmError` (the first batch's error is
+            re-raised).
+        ValueError: If `len(documents) <= batch_size` and the single
+            `extract` call's `check_integrity` fails, or if every batch
+            failed with `ValueError` (the first batch's error is
+            re-raised).
     """
     if not documents:
         return ExtractionPayload(question=question)
@@ -242,5 +290,18 @@ def extract_batched(
     batches = [
         documents[i : i + batch_size] for i in range(0, len(documents), batch_size)
     ]
-    payloads = bounded_map(lambda batch: extract(question, batch, completer), batches)
+    results = bounded_map(
+        lambda pair: _extract_batch_or_error(question, pair[1], completer, pair[0]),
+        list(enumerate(batches)),
+    )
+    payloads: list[ExtractionPayload] = []
+    first_error: LlmError | ValueError | None = None
+    for result in results:
+        if isinstance(result, ExtractionPayload):
+            payloads.append(result)
+        elif first_error is None:
+            first_error = result
+    if not payloads:
+        assert first_error is not None  # every batch failed -> at least one error
+        raise first_error
     return _merge_payloads(question, payloads)
