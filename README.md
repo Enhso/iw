@@ -145,7 +145,10 @@ summary.
 
 - **`POST /api/research`** — `{"question", "question_id": str|null,
   "context": {...}|null, "family_id": str|null, "providers": [str]|null,
-  "news_since": str|null, "max_news": int, "max_wiki": int}`. Resolves the
+  "news_since": str|null, "max_news": int, "max_wiki": int,
+  "extra_queries": [str]|null}`. `extra_queries` (at most 3 entries, each
+  non-blank and at most 200 characters, else `422`) adds one AskNews news
+  search per entry to the two default queries. Resolves the
   family (and its `last_seen`, used as `news_since` for gap-fill), runs the
   `research` worker, validates and atomically ingests the returned
   `ExtractionPayload`, updates the family's `last_seen`, and returns:

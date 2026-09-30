@@ -267,6 +267,10 @@ pub enum PayloadError {
     /// `question` is empty (after trimming whitespace).
     #[error("question must not be empty")]
     EmptyQuestion,
+    /// A `POST /api/research` request's `extra_queries` field is over the
+    /// count limit or holds a blank or over-long entry.
+    #[error("extra_queries {0}")]
+    InvalidExtraQueries(String),
 }
 
 impl ExtractionPayload {

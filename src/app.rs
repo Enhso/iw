@@ -233,6 +233,8 @@ struct ResearchRequestBody {
     max_wiki: Option<u32>,
     #[serde(default)]
     family_id: Option<String>,
+    #[serde(default)]
+    extra_queries: Option<Vec<String>>,
 }
 
 /// Response body for `POST /api/research`.
@@ -253,13 +255,72 @@ struct ResearchResponseBody {
 /// /api/research` (`docs/contracts.md` §C2: "up to 30 claims").
 const MAX_FAMILY_CLAIMS: usize = 30;
 
+/// The most `extra_queries` a `POST /api/research` request may carry.
+const MAX_EXTRA_QUERIES: usize = 3;
+
+/// The longest a single `extra_queries` entry may be, counted in characters
+/// (not bytes) after trimming surrounding whitespace.
+const MAX_EXTRA_QUERY_CHARS: usize = 200;
+
+/// Validates and normalizes a research request's `extra_queries` field.
+///
+/// Absent and empty both mean "no extra queries" and normalize to `None`,
+/// so they reach the worker exactly like an omitted field. Entries are
+/// returned trimmed.
+///
+/// `extra_queries` is an `Option<&[String]>`, the borrowed form of an
+/// `Option<Vec<String>>` (what `Option::as_deref` produces), so the caller
+/// keeps ownership of the body it validated.
+///
+/// # Errors
+/// Returns [`PayloadError::InvalidExtraQueries`] if there are more than
+/// [`MAX_EXTRA_QUERIES`] entries, or any entry is blank after trimming or
+/// longer than [`MAX_EXTRA_QUERY_CHARS`] characters.
+fn validate_extra_queries(
+    extra_queries: Option<&[String]>,
+) -> Result<Option<Vec<String>>, PayloadError> {
+    let Some(queries) = extra_queries.filter(|queries| !queries.is_empty()) else {
+        return Ok(None);
+    };
+    if queries.len() > MAX_EXTRA_QUERIES {
+        return Err(PayloadError::InvalidExtraQueries(format!(
+            "must contain at most {MAX_EXTRA_QUERIES} queries, got {}",
+            queries.len()
+        )));
+    }
+    // Collecting an iterator of `Result`s into `Result<Vec<_>, _>` stops at
+    // the first `Err` and returns it, like raising inside a list
+    // comprehension.
+    queries
+        .iter()
+        .enumerate()
+        .map(|(index, query)| {
+            let query = query.trim();
+            if query.is_empty() {
+                return Err(PayloadError::InvalidExtraQueries(format!(
+                    "entry {index} must not be blank"
+                )));
+            }
+            let chars = query.chars().count();
+            if chars > MAX_EXTRA_QUERY_CHARS {
+                return Err(PayloadError::InvalidExtraQueries(format!(
+                    "entry {index} must be at most {MAX_EXTRA_QUERY_CHARS} characters, got {chars}"
+                )));
+            }
+            Ok(query.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
 /// `POST /api/research`: resolves `family_id` (and its research history for
 /// gap-fill), runs the `research` worker, validates and ingests its output
 /// atomically, updates the family's `last_seen`, and returns the dossier's
 /// briefing alongside its claims and family/history context.
 ///
 /// # Errors
-/// Returns [`AppError::InvalidPayload`] (422) if `question` is empty,
+/// Returns [`AppError::InvalidPayload`] (422) if `question` is empty or
+/// `extra_queries` is invalid (see [`validate_extra_queries`]),
 /// [`AppError::Research`] (502) if the worker fails or returns an invalid
 /// payload, or [`AppError::Store`] (500) if a store operation fails.
 async fn research(
@@ -269,6 +330,7 @@ async fn research(
     if body.question.trim().is_empty() {
         return Err(AppError::InvalidPayload(PayloadError::EmptyQuestion));
     }
+    let extra_queries = validate_extra_queries(body.extra_queries.as_deref())?;
 
     // Resolve the family (if any) and its prior last_seen, for the worker
     // request's gap-fill `news_since` (spec s1).
@@ -316,6 +378,7 @@ async fn research(
         news_since,
         max_news: body.max_news,
         max_wiki: body.max_wiki,
+        extra_queries,
     };
 
     let payload: ExtractionPayload = state.worker.run_research(&worker_request).await?;
@@ -739,5 +802,76 @@ mod tests {
     fn parse_as_of_rejects_malformed_timestamp() {
         let result = parse_as_of(Some("not-a-timestamp".to_string()));
         assert!(matches!(result, Err(AppError::InvalidQuery(_))));
+    }
+
+    fn queries(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    fn validation_message(result: Result<Option<Vec<String>>, PayloadError>) -> String {
+        match result {
+            Err(err @ PayloadError::InvalidExtraQueries(_)) => err.to_string(),
+            other => panic!("expected InvalidExtraQueries, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extra_queries_absent_is_none() {
+        assert_eq!(validate_extra_queries(None).expect("absent"), None);
+    }
+
+    #[test]
+    fn extra_queries_empty_is_none() {
+        let empty: Vec<String> = Vec::new();
+        assert_eq!(validate_extra_queries(Some(&empty)).expect("empty"), None);
+    }
+
+    #[test]
+    fn extra_queries_accepts_one_to_three_entries() {
+        let all = queries(&["first", "second", "third"]);
+        for count in 1..=MAX_EXTRA_QUERIES {
+            let validated = validate_extra_queries(Some(&all[..count])).expect("valid");
+            assert_eq!(validated.as_deref(), Some(&all[..count]));
+        }
+    }
+
+    #[test]
+    fn extra_queries_rejects_more_than_three_entries() {
+        let message = validation_message(validate_extra_queries(Some(&queries(&[
+            "a", "b", "c", "d",
+        ]))));
+        assert_eq!(
+            message,
+            "extra_queries must contain at most 3 queries, got 4"
+        );
+    }
+
+    #[test]
+    fn extra_queries_rejects_empty_and_whitespace_only_entries() {
+        let message = validation_message(validate_extra_queries(Some(&queries(&["ok", " \t\n"]))));
+        assert_eq!(message, "extra_queries entry 1 must not be blank");
+        let message = validation_message(validate_extra_queries(Some(&queries(&[""]))));
+        assert_eq!(message, "extra_queries entry 0 must not be blank");
+    }
+
+    #[test]
+    fn extra_queries_rejects_entries_over_200_characters() {
+        let too_long = "x".repeat(MAX_EXTRA_QUERY_CHARS + 1);
+        let message =
+            validation_message(validate_extra_queries(Some(&["ok".to_string(), too_long])));
+        assert_eq!(
+            message,
+            "extra_queries entry 1 must be at most 200 characters, got 201"
+        );
+    }
+
+    #[test]
+    fn extra_queries_length_is_counted_in_trimmed_characters_not_bytes() {
+        // 200 two-byte characters (400 bytes) padded with whitespace: valid.
+        let at_limit = format!("  {}\t", "é".repeat(MAX_EXTRA_QUERY_CHARS));
+        let validated = validate_extra_queries(Some(&[at_limit]))
+            .expect("200 characters after trimming is within the limit")
+            .expect("one entry");
+        assert_eq!(validated, vec!["é".repeat(MAX_EXTRA_QUERY_CHARS)]);
     }
 }

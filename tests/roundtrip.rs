@@ -7,7 +7,7 @@
 //! -managed Python worker to prove the actual Rust -> Python process
 //! boundary; they are not `#[ignore]`d.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -241,6 +241,118 @@ async fn research_empty_question_is_422() {
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+/// Builds an [`AppState`] whose worker is a shell script that saves the
+/// request JSON it reads from stdin to the returned path, then prints the
+/// canned research response. The path does not exist until a request has
+/// reached the worker. `dir` holds the script and the capture file.
+fn capturing_state(dir: &Path) -> (AppState, PathBuf) {
+    let capture_path = dir.join("worker_request.json");
+    let script_path = dir.join("capture_worker.sh");
+    let canned_response = manifest_dir().join("fixtures/rust/semiconductor_v2.json");
+    std::fs::write(
+        &script_path,
+        format!(
+            "cat > \"{}\"\ncat \"{}\"\n",
+            capture_path.display(),
+            canned_response.display()
+        ),
+    )
+    .expect("write capture script");
+
+    let store = GraphStore::open_memory().expect("open in-memory store");
+    store.init_schema().expect("init schema");
+    let state = AppState {
+        store: Arc::new(store),
+        worker: Arc::new(ResearchWorker {
+            uv_bin: PathBuf::from("uv"),
+            python_dir: manifest_dir().join("python"),
+            fixture_dir: None,
+            timeout: Duration::from_secs(10),
+            worker_cmd: Some(vec![
+                "sh".to_string(),
+                script_path.to_string_lossy().into_owned(),
+            ]),
+        }),
+    };
+    (state, capture_path)
+}
+
+#[tokio::test]
+async fn research_rejects_invalid_extra_queries_as_422_before_running_the_worker() {
+    let too_long = "x".repeat(201);
+    let cases = [
+        (
+            serde_json::json!(["a", "b", "c", "d"]),
+            "extra_queries must contain at most 3 queries, got 4",
+        ),
+        (
+            serde_json::json!(["a", "   "]),
+            "extra_queries entry 1 must not be blank",
+        ),
+        (
+            serde_json::json!([too_long]),
+            "extra_queries entry 0 must be at most 200 characters, got 201",
+        ),
+    ];
+    for (extra_queries, expected_message) in cases {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let (state, capture_path) = capturing_state(dir.path());
+
+        let (status, body) = send(
+            state,
+            post_json(
+                "/api/research",
+                serde_json::json!({
+                    "question": FIXTURE_QUESTION,
+                    "extra_queries": extra_queries,
+                }),
+            ),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "body: {body}");
+        let error = body["error"].as_str().expect("error string");
+        assert!(error.contains(expected_message), "error: {error}");
+        assert!(!capture_path.exists(), "worker ran despite invalid request");
+    }
+}
+
+#[tokio::test]
+async fn research_forwards_extra_queries_to_the_worker_only_when_present() {
+    let cases = [
+        ("absent", serde_json::json!({}), None),
+        ("empty", serde_json::json!({ "extra_queries": [] }), None),
+        ("null", serde_json::json!({ "extra_queries": null }), None),
+        (
+            "present",
+            serde_json::json!({ "extra_queries": ["  first query ", "second query"] }),
+            Some(serde_json::json!(["first query", "second query"])),
+        ),
+    ];
+    for (label, extra_fields, expected) in cases {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let (state, capture_path) = capturing_state(dir.path());
+        let mut request_body = serde_json::json!({ "question": FIXTURE_QUESTION });
+        request_body
+            .as_object_mut()
+            .expect("object")
+            .extend(extra_fields.as_object().expect("object").clone());
+
+        let (status, body) = send(state, post_json("/api/research", request_body)).await;
+
+        assert_eq!(status, StatusCode::OK, "{label}: body: {body}");
+        let worker_request: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&capture_path).expect("worker received a request"),
+        )
+        .expect("worker request is valid JSON");
+        assert_eq!(
+            worker_request.get("extra_queries"),
+            expected.as_ref(),
+            "{label}: worker request: {worker_request}"
+        );
+    }
 }
 
 #[tokio::test]

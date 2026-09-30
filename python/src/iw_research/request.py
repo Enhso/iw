@@ -63,6 +63,7 @@ class ResearchRequest(BaseModel):
     news_since: str | None = None
     max_news: int = 12
     max_wiki: int = 3
+    extra_queries: list[str] = Field(default_factory=list)
 
 
 class ClassifyFamilyRequest(BaseModel):

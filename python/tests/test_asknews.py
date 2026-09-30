@@ -205,6 +205,170 @@ def test_fetch_news_one_query_failing_still_returns_the_other(
     assert any(record.levelno == logging.ERROR for record in caplog.records)
 
 
+def _news_url(query: str, n_articles: int = 5) -> httpx.URL:
+    """The default-window (`hours_back`) news search URL for `query`."""
+    return httpx.URL(NEWS_URL).copy_merge_params(
+        {
+            "query": query,
+            "n_articles": str(n_articles),
+            "return_type": "dicts",
+            "method": "nl",
+            "strategy": "default",
+            "hours_back": "720",
+        }
+    )
+
+
+def _articles(*names: str) -> dict[str, list[dict[str, str]]]:
+    """An AskNews `as_dicts` body with one article per name (url `.../<name>`)."""
+    return {
+        "as_dicts": [
+            {
+                "article_url": f"https://news.example.com/{name}",
+                "eng_title": f"Title {name}",
+                "summary": f"Summary {name}",
+            }
+            for name in names
+        ]
+    }
+
+
+def test_fetch_news_runs_extra_queries_and_dedupes_across_all_queries(
+    httpx_mock: HTTPXMock,
+) -> None:
+    # The keyword query for this question is "ecb cut rates".
+    httpx_mock.add_response(
+        url=_news_url("Will the ECB cut rates?"), json=_articles("a")
+    )
+    httpx_mock.add_response(url=_news_url("ecb cut rates"), json=_articles("a", "b"))
+    httpx_mock.add_response(
+        url=_news_url("ecb october statement"), json=_articles("b", "c")
+    )
+    httpx_mock.add_response(
+        url=_news_url("deposit facility rate"), json=_articles("c", "d")
+    )
+    with httpx.Client() as client:
+        docs = fetch_news(
+            client,
+            "key",
+            "Will the ECB cut rates?",
+            None,
+            5,
+            RETRIEVED_AT,
+            extra_queries=["ecb october statement", "deposit facility rate"],
+        )
+
+    assert [d.url for d in docs] == [
+        f"https://news.example.com/{name}" for name in ("a", "b", "c", "d")
+    ]
+    sent_queries = [r.url.params["query"] for r in httpx_mock.get_requests()]
+    assert sent_queries == [
+        "Will the ECB cut rates?",
+        "ecb cut rates",
+        "ecb october statement",
+        "deposit facility rate",
+    ]
+
+
+def test_fetch_news_without_extra_queries_runs_only_the_two_default_queries(
+    httpx_mock: HTTPXMock,
+) -> None:
+    httpx_mock.add_response(
+        url=_news_url("Will the ECB cut rates?"), json=_articles("a")
+    )
+    httpx_mock.add_response(url=_news_url("ecb cut rates"), json=_articles("b"))
+    with httpx.Client() as client:
+        docs = fetch_news(
+            client, "key", "Will the ECB cut rates?", None, 5, RETRIEVED_AT, []
+        )
+
+    assert len(docs) == 2
+    assert len(httpx_mock.get_requests()) == 2
+
+
+def test_fetch_news_clamps_n_articles_for_extra_queries_too(
+    httpx_mock: HTTPXMock,
+) -> None:
+    for query in ("Will the ECB cut rates?", "ecb cut rates", "targeted follow-up"):
+        httpx_mock.add_response(
+            url=_news_url(query, n_articles=MAX_N_ARTICLES), json=_articles()
+        )
+    with httpx.Client() as client:
+        fetch_news(
+            client,
+            "key",
+            "Will the ECB cut rates?",
+            None,
+            12,
+            RETRIEVED_AT,
+            extra_queries=["targeted follow-up"],
+        )
+    # `httpx_mock` raises on teardown if a registered response was never matched,
+    # so all three requests (both defaults and the extra) used the clamped value.
+
+
+def test_fetch_news_extra_queries_use_start_timestamp_when_news_since_given(
+    httpx_mock: HTTPXMock,
+) -> None:
+    for query in ("q", "targeted follow-up"):
+        httpx_mock.add_response(
+            url=httpx.URL(NEWS_URL).copy_merge_params(
+                {
+                    "query": query,
+                    "n_articles": "3",
+                    "return_type": "dicts",
+                    "method": "nl",
+                    "strategy": "default",
+                    "start_timestamp": "1767225600",
+                }
+            ),
+            json=_articles(),
+            is_reusable=True,
+        )
+    with httpx.Client() as client:
+        fetch_news(
+            client,
+            "key",
+            "q",
+            "2026-01-01T00:00:00Z",
+            3,
+            RETRIEVED_AT,
+            extra_queries=["targeted follow-up"],
+        )
+    extra_request = httpx_mock.get_requests()[-1]
+    assert extra_request.url.params["query"] == "targeted follow-up"
+    assert "hours_back" not in extra_request.url.params
+
+
+def test_fetch_news_failing_extra_query_logs_and_keeps_the_other_queries(
+    httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    httpx_mock.add_response(
+        url=_news_url("Will the ECB cut rates?"), json=_articles("a")
+    )
+    httpx_mock.add_response(url=_news_url("ecb cut rates"), json=_articles("a"))
+    httpx_mock.add_response(url=_news_url("broken extra"), status_code=500)
+    httpx_mock.add_response(url=_news_url("working extra"), json=_articles("w"))
+    with caplog.at_level(logging.ERROR), httpx.Client() as client:
+        docs = fetch_news(
+            client,
+            "key",
+            "Will the ECB cut rates?",
+            None,
+            5,
+            RETRIEVED_AT,
+            extra_queries=["broken extra", "working extra"],
+        )
+
+    assert [d.url for d in docs] == [
+        "https://news.example.com/a",
+        "https://news.example.com/w",
+    ]
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(errors) == 1
+    assert "broken extra" in errors[0].getMessage()
+
+
 def test_fetch_wiki_returns_documents(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         url=httpx.URL(WIKI_URL).copy_merge_params(

@@ -10,7 +10,7 @@ one place so it is easy to adjust if AskNews changes them.
 
 import logging
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -120,25 +120,29 @@ def fetch_news(
     news_since: str | None,
     max_articles: int,
     retrieved_at: str,
+    extra_queries: Sequence[str] = (),
 ) -> list[SourceDocument]:
     """Fetch AskNews news articles for `question` (contracts.md B1).
 
-    Runs two queries -- the question title verbatim, and a keyword query
-    built from it -- and deduplicates the combined results by url. Each
-    article's full text is used if present, else its summary.
+    Runs two default queries -- the question title verbatim, and a keyword
+    query built from it -- plus one query per entry of `extra_queries`
+    (verbatim), and deduplicates the combined results by url across all of
+    them. Each article's full text is used if present, else its summary.
 
     Args:
-        client: An `httpx.Client` used for both requests.
+        client: An `httpx.Client` used for every request.
         api_key: `ASKNEWS_API_KEY`, sent as a bearer token.
         question: The research question.
         news_since: RFC 3339 UTC timestamp to start from, or `None` to use
             `hours_back=DEFAULT_HOURS_BACK`.
         max_articles: `n_articles` for each query, clamped to `MAX_N_ARTICLES`.
         retrieved_at: RFC 3339 UTC timestamp to stamp onto each document.
+        extra_queries: Additional targeted search queries (contracts.md A1);
+            empty means only the two default queries run.
 
     Returns:
-        Deduplicated documents from both queries. Returns `[]` and logs an
-        error for whichever query's request fails; the other query's
+        Deduplicated documents from all queries. Returns `[]` and logs an
+        error for whichever query's request fails; the other queries'
         results (if any) are still returned.
     """
     params: dict[str, Any] = {
@@ -157,7 +161,7 @@ def fetch_news(
         params["hours_back"] = DEFAULT_HOURS_BACK
 
     candidates: list[SourceDocument | None] = []
-    for query in (question, _keyword_query(question)):
+    for query in (question, _keyword_query(question), *extra_queries):
         try:
             response = client.get(
                 NEWS_URL,

@@ -62,6 +62,7 @@ def _fetch_live(
                         request.news_since,
                         request.max_news,
                         retrieved_at,
+                        request.extra_queries,
                     )
                 else:
                     documents += asknews.fetch_wiki(

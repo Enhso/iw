@@ -1,12 +1,15 @@
 """Tests for iw_research.research: the `research` subcommand's orchestration."""
 
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 
+import httpx
 import pytest
 
 from iw_research.request import ResearchRequest
-from iw_research.research import _fetch_fixture, run_research
+from iw_research.research import _fetch_fixture, _fetch_live, run_research
+from iw_research.sources import SourceDocument, asknews
 
 QUESTION = (
     "Can export controls durably slow China's access to advanced semiconductor "
@@ -60,3 +63,35 @@ def test_fetch_fixture_logs_error_and_skips_unknown_provider(
         )
     assert {d.provider for d in documents} == {"wikipedia"}
     assert any("unknown provider" in record.message for record in caplog.records)
+
+
+def test_fetch_live_passes_extra_queries_to_asknews_news(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ASKNEWS_API_KEY", "key")
+    received: list[Sequence[str]] = []
+
+    def fake_fetch_news(
+        client: httpx.Client,
+        api_key: str,
+        question: str,
+        news_since: str | None,
+        max_articles: int,
+        retrieved_at: str,
+        extra_queries: Sequence[str] = (),
+    ) -> list[SourceDocument]:
+        received.append(extra_queries)
+        return []
+
+    monkeypatch.setattr(asknews, "fetch_news", fake_fetch_news)
+    request = ResearchRequest.model_validate(
+        {
+            "question": QUESTION,
+            "providers": ["asknews_news"],
+            "extra_queries": ["targeted one", "targeted two"],
+        }
+    )
+
+    _fetch_live(request, ["asknews_news"], "2026-09-14T00:00:00Z")
+
+    assert received == [["targeted one", "targeted two"]]

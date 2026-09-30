@@ -32,6 +32,19 @@ def test_research_request_only_requires_question() -> None:
     assert request.news_since is None
     assert request.max_news == 12
     assert request.max_wiki == 3
+    assert request.extra_queries == []
+
+
+def test_research_request_parses_extra_queries() -> None:
+    request = ResearchRequest.model_validate(
+        {"question": "Q?", "extra_queries": ["first query", "second query"]}
+    )
+    assert request.extra_queries == ["first query", "second query"]
+
+
+def test_research_request_rejects_null_extra_queries() -> None:
+    with pytest.raises(ValidationError):
+        ResearchRequest.model_validate({"question": "Q?", "extra_queries": None})
 
 
 def test_research_request_rejects_unknown_provider() -> None:

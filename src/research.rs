@@ -43,8 +43,9 @@ pub struct ResearchFamily {
 /// `max_news`/`max_wiki` are `Option<u32>` on the Rust side (the HTTP
 /// caller may omit them) but the worker's `ResearchRequest.max_news` /
 /// `.max_wiki` are non-optional `int` fields with their own defaults (12,
-/// 3): sending an explicit JSON `null` fails Pydantic validation, so
-/// `None` here must be **omitted** from the JSON, not nulled, letting the
+/// 3), and `.extra_queries` a non-optional `list[str]` defaulting to `[]`:
+/// sending an explicit JSON `null` fails Pydantic validation, so `None`
+/// here must be **omitted** from the JSON, not nulled, letting the
 /// worker's own default apply. Every other optional field is `X | None` on
 /// the worker side, where an explicit `null` is accepted; they are also
 /// omitted when absent, for a consistently small wire payload.
@@ -65,6 +66,11 @@ pub struct ResearchRequest {
     pub max_news: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_wiki: Option<u32>,
+    /// Extra targeted news search queries, run in addition to the two
+    /// default ones (`docs/contracts.md` §A1). Callers pass `None` rather
+    /// than `Some(vec![])` for "no extra queries".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra_queries: Option<Vec<String>>,
 }
 
 /// One live family offered as a `classify-family` candidate
@@ -458,7 +464,27 @@ mod tests {
             news_since: None,
             max_news: None,
             max_wiki: None,
+            extra_queries: None,
         }
+    }
+
+    #[test]
+    fn extra_queries_is_omitted_from_worker_json_when_absent() {
+        let json = serde_json::to_value(sample_research_request()).expect("serialize request");
+        assert!(json.get("extra_queries").is_none(), "request json: {json}");
+    }
+
+    #[test]
+    fn extra_queries_is_sent_to_worker_when_present() {
+        let request = ResearchRequest {
+            extra_queries: Some(vec!["first".to_string(), "second".to_string()]),
+            ..sample_research_request()
+        };
+        let json = serde_json::to_value(request).expect("serialize request");
+        assert_eq!(
+            json["extra_queries"],
+            serde_json::json!(["first", "second"])
+        );
     }
 
     /// A worker pointed at [`fixtures/rust/stub_worker.sh`], which ignores
@@ -591,6 +617,7 @@ mod tests {
             news_since: None,
             max_news: None,
             max_wiki: None,
+            extra_queries: None,
         };
 
         let payload = worker
