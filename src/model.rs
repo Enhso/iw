@@ -16,9 +16,17 @@ use sha2::{Digest, Sha256};
 use crate::embed::fnv1a64;
 
 const ENTITY_KINDS: &[&str] = &["person", "organization", "country", "technology", "policy"];
-/// Source providers accepted in schema v2: the two AskNews endpoints plus
-/// the v1 no-key default pair (`docs/contracts.md` §B1).
-const SOURCE_PROVIDERS: &[&str] = &["asknews_news", "asknews_wiki", "wikipedia", "arxiv"];
+/// Source providers accepted in schema v2: the two AskNews endpoints, the
+/// free Google News and Bing News providers, and the v1 no-key pair
+/// (`docs/contracts.md` §B1).
+const SOURCE_PROVIDERS: &[&str] = &[
+    "asknews_news",
+    "asknews_wiki",
+    "google_news",
+    "bing_news",
+    "wikipedia",
+    "arxiv",
+];
 const CLAIM_KINDS: &[&str] = &["hypothesis", "fact", "assumption"];
 const EVIDENCE_STANCES: &[&str] = &["supports", "contradicts"];
 const CONFIDENCE_LEVELS: &[&str] = &["low", "medium", "high"];
@@ -102,7 +110,8 @@ pub struct Source {
     pub title: String,
     /// Document URL.
     pub url: String,
-    /// One of `asknews_news | asknews_wiki | wikipedia | arxiv`.
+    /// One of `asknews_news | asknews_wiki | google_news | bing_news | wikipedia
+    /// | arxiv`.
     pub provider: String,
     /// `YYYY-MM-DD`, or `""` if unknown.
     pub published: String,
@@ -908,6 +917,38 @@ mod tests {
     #[test]
     fn valid_payload_passes() {
         assert!(sample_payload().validate().is_ok());
+    }
+
+    /// `sample_payload()` with its only source re-labelled as `provider`
+    /// (id and evidence reference updated to match).
+    fn payload_with_provider(provider: &str) -> ExtractionPayload {
+        let mut payload = sample_payload();
+        let source = &mut payload.sources[0];
+        source.provider = provider.to_string();
+        source.id = format!("src:{provider}:{}", &sha256_hex(&source.url)[..16]);
+        payload.evidence[0].source_id = source.id.clone();
+        payload
+    }
+
+    #[test]
+    fn free_news_providers_are_accepted_source_providers() {
+        for provider in ["google_news", "bing_news"] {
+            assert!(
+                payload_with_provider(provider).validate().is_ok(),
+                "{provider} should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_source_provider_is_rejected() {
+        match payload_with_provider("bing").validate() {
+            Err(PayloadError::InvalidEnum { field, value }) => {
+                assert_eq!(field, "sources[].provider");
+                assert_eq!(value, "bing");
+            }
+            other => panic!("expected InvalidEnum, got {other:?}"),
+        }
     }
 
     #[test]

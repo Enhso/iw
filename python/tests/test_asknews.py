@@ -11,7 +11,6 @@ from iw_research.sources.asknews import (
     MAX_N_ARTICLES,
     NEWS_URL,
     WIKI_URL,
-    _keyword_query,
     fetch_news,
     fetch_wiki,
     load_news_fixture,
@@ -19,17 +18,6 @@ from iw_research.sources.asknews import (
 )
 
 RETRIEVED_AT = "2026-09-14T00:00:00Z"
-
-
-def test_keyword_query_drops_stopwords_and_preserves_order() -> None:
-    assert (
-        _keyword_query("Will the ECB cut its deposit rate at the October meeting?")
-        == "ecb cut deposit rate october meeting"
-    )
-
-
-def test_keyword_query_falls_back_to_question_when_all_stopwords() -> None:
-    assert _keyword_query("is it") == "is it"
 
 
 def test_fetch_news_runs_two_queries_and_dedupes_by_url(httpx_mock: HTTPXMock) -> None:
@@ -40,8 +28,7 @@ def test_fetch_news_runs_two_queries_and_dedupes_by_url(httpx_mock: HTTPXMock) -
                 "n_articles": "5",
                 "return_type": "dicts",
                 "method": "nl",
-                "strategy": "default",
-                "hours_back": "720",
+                "strategy": "latest news",
             }
         ),
         json={
@@ -62,8 +49,7 @@ def test_fetch_news_runs_two_queries_and_dedupes_by_url(httpx_mock: HTTPXMock) -
                 "n_articles": "5",
                 "return_type": "dicts",
                 "method": "nl",
-                "strategy": "default",
-                "hours_back": "720",
+                "strategy": "latest news",
             }
         ),
         json={
@@ -82,7 +68,7 @@ def test_fetch_news_runs_two_queries_and_dedupes_by_url(httpx_mock: HTTPXMock) -
         },
     )
     with httpx.Client() as client:
-        docs = fetch_news(client, "key", "export controls", None, 5, RETRIEVED_AT)
+        docs = fetch_news(client, "key", "export controls", 5, RETRIEVED_AT)
 
     assert {d.url for d in docs} == {
         "https://news.example.com/a",
@@ -109,38 +95,15 @@ def test_fetch_news_clamps_n_articles_to_the_plan_maximum(
                     "n_articles": str(MAX_N_ARTICLES),
                     "return_type": "dicts",
                     "method": "nl",
-                    "strategy": "default",
-                    "hours_back": "720",
+                    "strategy": "latest news",
                 }
             ),
             json={"as_dicts": []},
         )
     with httpx.Client() as client:
-        fetch_news(client, "key", "export controls", None, 12, RETRIEVED_AT)
+        fetch_news(client, "key", "export controls", 12, RETRIEVED_AT)
     # `httpx_mock` raises on teardown if a registered response was never matched,
     # so reaching here already proves both requests used the clamped value.
-
-
-def test_fetch_news_uses_start_timestamp_when_news_since_given(
-    httpx_mock: HTTPXMock,
-) -> None:
-    httpx_mock.add_response(
-        url=httpx.URL(NEWS_URL).copy_merge_params(
-            {
-                "query": "q",
-                "n_articles": "3",
-                "return_type": "dicts",
-                "method": "nl",
-                "strategy": "default",
-                "start_timestamp": "1767225600",
-            }
-        ),
-        json={"as_dicts": []},
-        is_reusable=True,
-    )
-    with httpx.Client() as client:
-        docs = fetch_news(client, "key", "q", "2026-01-01T00:00:00Z", 3, RETRIEVED_AT)
-    assert docs == []
 
 
 def test_fetch_news_sends_bearer_auth(httpx_mock: HTTPXMock) -> None:
@@ -151,8 +114,7 @@ def test_fetch_news_sends_bearer_auth(httpx_mock: HTTPXMock) -> None:
                 "n_articles": "1",
                 "return_type": "dicts",
                 "method": "nl",
-                "strategy": "default",
-                "hours_back": "720",
+                "strategy": "latest news",
             }
         ),
         match_headers={"Authorization": "Bearer my-key"},
@@ -160,7 +122,7 @@ def test_fetch_news_sends_bearer_auth(httpx_mock: HTTPXMock) -> None:
         is_reusable=True,
     )
     with httpx.Client() as client:
-        fetch_news(client, "my-key", "q", None, 1, RETRIEVED_AT)
+        fetch_news(client, "my-key", "q", 1, RETRIEVED_AT)
 
 
 def test_fetch_news_one_query_failing_still_returns_the_other(
@@ -176,8 +138,7 @@ def test_fetch_news_one_query_failing_still_returns_the_other(
                 "n_articles": "1",
                 "return_type": "dicts",
                 "method": "nl",
-                "strategy": "default",
-                "hours_back": "720",
+                "strategy": "latest news",
             }
         ),
         status_code=500,
@@ -189,8 +150,7 @@ def test_fetch_news_one_query_failing_still_returns_the_other(
                 "n_articles": "1",
                 "return_type": "dicts",
                 "method": "nl",
-                "strategy": "default",
-                "hours_back": "720",
+                "strategy": "latest news",
             }
         ),
         json={
@@ -200,21 +160,30 @@ def test_fetch_news_one_query_failing_still_returns_the_other(
         },
     )
     with caplog.at_level(logging.ERROR), httpx.Client() as client:
-        docs = fetch_news(client, "key", "q", None, 1, RETRIEVED_AT)
+        docs = fetch_news(client, "key", "q", 1, RETRIEVED_AT)
     assert len(docs) == 1
     assert any(record.levelno == logging.ERROR for record in caplog.records)
 
 
+def test_fetch_news_quota_exhausted_402_returns_empty_and_logs(
+    httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    httpx_mock.add_response(status_code=402, is_reusable=True)
+    with caplog.at_level(logging.ERROR), httpx.Client() as client:
+        docs = fetch_news(client, "key", "q", 1, RETRIEVED_AT, ["extra"])
+    assert docs == []
+    assert any("402" in record.getMessage() for record in caplog.records)
+
+
 def _news_url(query: str, n_articles: int = 5) -> httpx.URL:
-    """The default-window (`hours_back`) news search URL for `query`."""
+    """The one-call `latest news` search URL for `query`."""
     return httpx.URL(NEWS_URL).copy_merge_params(
         {
             "query": query,
             "n_articles": str(n_articles),
             "return_type": "dicts",
             "method": "nl",
-            "strategy": "default",
-            "hours_back": "720",
+            "strategy": "latest news",
         }
     )
 
@@ -252,7 +221,6 @@ def test_fetch_news_runs_extra_queries_and_dedupes_across_all_queries(
             client,
             "key",
             "Will the ECB cut rates?",
-            None,
             5,
             RETRIEVED_AT,
             extra_queries=["ecb october statement", "deposit facility rate"],
@@ -278,9 +246,7 @@ def test_fetch_news_without_extra_queries_runs_only_the_two_default_queries(
     )
     httpx_mock.add_response(url=_news_url("ecb cut rates"), json=_articles("b"))
     with httpx.Client() as client:
-        docs = fetch_news(
-            client, "key", "Will the ECB cut rates?", None, 5, RETRIEVED_AT, []
-        )
+        docs = fetch_news(client, "key", "Will the ECB cut rates?", 5, RETRIEVED_AT, [])
 
     assert len(docs) == 2
     assert len(httpx_mock.get_requests()) == 2
@@ -298,7 +264,6 @@ def test_fetch_news_clamps_n_articles_for_extra_queries_too(
             client,
             "key",
             "Will the ECB cut rates?",
-            None,
             12,
             RETRIEVED_AT,
             extra_queries=["targeted follow-up"],
@@ -307,37 +272,28 @@ def test_fetch_news_clamps_n_articles_for_extra_queries_too(
     # so all three requests (both defaults and the extra) used the clamped value.
 
 
-def test_fetch_news_extra_queries_use_start_timestamp_when_news_since_given(
+def test_fetch_news_sends_one_call_latest_news_params_without_a_look_back(
     httpx_mock: HTTPXMock,
 ) -> None:
-    for query in ("q", "targeted follow-up"):
-        httpx_mock.add_response(
-            url=httpx.URL(NEWS_URL).copy_merge_params(
-                {
-                    "query": query,
-                    "n_articles": "3",
-                    "return_type": "dicts",
-                    "method": "nl",
-                    "strategy": "default",
-                    "start_timestamp": "1767225600",
-                }
-            ),
-            json=_articles(),
-            is_reusable=True,
-        )
+    # AskNews bills a `latest news` search (fixed 48 h window) as 1 call and an
+    # archive search as 5; a look-back parameter would be meaningless here.
+    httpx_mock.add_response(json=_articles(), is_reusable=True)
     with httpx.Client() as client:
         fetch_news(
             client,
             "key",
-            "q",
-            "2026-01-01T00:00:00Z",
-            3,
+            "Will the ECB cut rates?",
+            5,
             RETRIEVED_AT,
             extra_queries=["targeted follow-up"],
         )
-    extra_request = httpx_mock.get_requests()[-1]
-    assert extra_request.url.params["query"] == "targeted follow-up"
-    assert "hours_back" not in extra_request.url.params
+
+    requests = httpx_mock.get_requests()
+    assert len(requests) == 3
+    for request in requests:
+        assert request.url.params["strategy"] == "latest news"
+        assert "hours_back" not in request.url.params
+        assert "start_timestamp" not in request.url.params
 
 
 def test_fetch_news_failing_extra_query_logs_and_keeps_the_other_queries(
@@ -354,7 +310,6 @@ def test_fetch_news_failing_extra_query_logs_and_keeps_the_other_queries(
             client,
             "key",
             "Will the ECB cut rates?",
-            None,
             5,
             RETRIEVED_AT,
             extra_queries=["broken extra", "working extra"],
