@@ -21,7 +21,7 @@ from .llm import Completer, FixtureChatClient, client_from_env
 from .normalize import normalize, to_documents, to_sources
 from .request import ResearchRequest, default_providers
 from .schema import ExtractionPayload
-from .sources import SourceDocument, arxiv, asknews, wikipedia
+from .sources import SourceDocument, arxiv, asknews, bing_news, google_news, wikipedia
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,12 @@ def _fetch_live(
                 documents += arxiv.search(
                     client, request.question, request.max_wiki, retrieved_at
                 )
+            elif provider == "google_news":
+                documents += google_news.fetch(
+                    client, request.question, retrieved_at, request.extra_queries
+                )
+            elif provider == "bing_news":
+                documents += bing_news.fetch(client, request.question, retrieved_at)
             elif provider in ("asknews_news", "asknews_wiki"):
                 api_key = os.environ.get("ASKNEWS_API_KEY")
                 if not api_key:
@@ -59,7 +65,6 @@ def _fetch_live(
                         client,
                         api_key,
                         request.question,
-                        request.news_since,
                         request.max_news,
                         retrieved_at,
                         request.extra_queries,
@@ -90,6 +95,10 @@ def _fetch_fixture(
             documents += asknews.load_news_fixture(fixture_dir, retrieved_at)
         elif provider == "asknews_wiki":
             documents += asknews.load_wiki_fixture(fixture_dir, retrieved_at)
+        elif provider in ("google_news", "bing_news"):
+            # No offline fixture exists for the free news providers; skipping
+            # them keeps the committed fixture payload byte-stable.
+            logger.info("provider %s has no offline fixture; skipping", provider)
         else:
             logger.error("unknown provider %r", provider)
     return documents

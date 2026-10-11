@@ -34,8 +34,9 @@ Two processes, one contract.
   rendering. It is the only process that opens the mnestic graph store; no
   other process talks to the database directly.
 - **Python (`iw-research`)** is a stateless worker. Invoked once per request
-  as a subcommand CLI, it fetches source documents (AskNews news+wiki by
-  default, Wikipedia+arXiv as the no-key fallback), runs a relevance/prompt-
+  as a subcommand CLI, it fetches source documents (Google News, Bing News
+  and Wikipedia by default, plus AskNews latest-news with `ASKNEWS_API_KEY`
+  or arXiv without it), runs a relevance/prompt-
   injection filter and an LLM extraction pass over them, scores each
   extracted claim's evidentiary support, and prints exactly one JSON
   document to stdout. It keeps no state between invocations and never opens
@@ -105,7 +106,7 @@ never reads or logs these; they pass through via the inherited process
 environment):
 
 ```
-export ASKNEWS_API_KEY=ank_...          # optional: news+wiki provider
+export ASKNEWS_API_KEY=ank_...          # optional: AskNews latest-news provider
 export TYPESAFE_API_KEY=...             # optional: Jev gates
 export LLM_API_BASE=https://openrouter.ai/api/v1
 export LLM_API_KEY=sk-or-...
@@ -119,8 +120,29 @@ curl -s -X POST http://127.0.0.1:8080/api/research \
   -d '{"question": "Will the ECB cut its deposit rate at the October 2026 meeting?"}'
 ```
 
-Without `ASKNEWS_API_KEY`, the worker falls back to the keyless Wikipedia +
-arXiv providers. Without `TYPESAFE_API_KEY`, both Jev gates are skipped
+By default every research blends the free news sources with the rest:
+`google_news`, `bing_news` and `wikipedia`, plus `asknews_news` when
+`ASKNEWS_API_KEY` is set, or `arxiv` when it is not. `asknews_wiki` is no
+longer a default but stays a valid `providers` entry. Each provider that
+fails or returns nothing is logged and contributes no documents; research
+fails only if every requested provider returns zero documents, so an
+AskNews `402` (monthly quota spent) degrades to the free sources.
+
+- `google_news`: the Google News RSS search for the question's keyword
+  query over the last 30 days. Each query becomes one document bundling up
+  to 20 headlines, one per line (`YYYY-MM-DD | <source> | <headline>`),
+  newest first.
+- `bing_news`: the Bing News RSS search for the keyword query. One document
+  bundles up to 10 items (`YYYY-MM-DD | <domain> | <title> | <snippet>`);
+  the top 3 articles are also fetched and extracted to text with
+  `trafilatura` (15 s timeout each, 8,000 characters at most, skipped on any
+  failure; many news sites refuse non-browser clients, so fewer than 3 is
+  common).
+- `asknews_news`: only cheap `latest news` searches (AskNews' last 48
+  hours, billed as 1 call each, against 5 for an archive search): the
+  question verbatim, its keyword query, and one per `extra_queries` entry.
+
+Without `TYPESAFE_API_KEY`, both Jev gates are skipped
 (every fetched document is kept, and no claim gets a `support` score).
 `LLM_API_KEY`/`LLM_MODEL` are required in live mode; see
 [LLM model chain](#llm-model-chain-llm_model) for how to choose `LLM_MODEL`.
@@ -147,9 +169,11 @@ summary.
   "context": {...}|null, "family_id": str|null, "providers": [str]|null,
   "news_since": str|null, "max_news": int, "max_wiki": int,
   "extra_queries": [str]|null}`. `extra_queries` (at most 3 entries, each
-  non-blank and at most 200 characters, else `422`) adds one AskNews news
-  search per entry to the two default queries. Resolves the
-  family (and its `last_seen`, used as `news_since` for gap-fill), runs the
+  non-blank and at most 200 characters, else `422`) adds one AskNews
+  latest-news search and one Google News search per entry to the default
+  queries. Resolves the
+  family (and its `last_seen`, sent to the worker as `news_since`, which no
+  provider currently uses), runs the
   `research` worker, validates and atomically ingests the returned
   `ExtractionPayload`, updates the family's `last_seen`, and returns:
 
@@ -246,7 +270,10 @@ network calls. `fixtures/offline/` is the repository's committed fixture
 set; `fixtures/payload/semiconductor.json` is `research`'s exact stdout for
 that fixture set, byte-compared in `python/tests/test_cli.py` and
 re-verified across the real Rust→Python process boundary in
-`tests/roundtrip.rs::research_roundtrip_across_python_boundary`.
+`tests/roundtrip.rs::research_roundtrip_across_python_boundary`. The
+`google_news` and `bing_news` providers have no offline fixture and are
+skipped in fixture mode (the real responses their unit tests mock are in
+`fixtures/http/`).
 
 Within `research`, the worker's own pipeline is: fetch (per requested
 provider) → normalize (dedupe by url, truncate, sort) → relevance/injection
@@ -275,7 +302,7 @@ environment), never by Rust.
 | `LLM_API_BASE`             | `https://api.openai.com/v1`     | The worker's chat-completions API base url.          |
 | `LLM_API_KEY`              | required in live mode           | Bearer token for `LLM_API_BASE`.                     |
 | `LLM_MODEL`                | required in live mode           | Comma-separated fallback chain; see below.           |
-| `ASKNEWS_API_KEY`          | unset (Wikipedia+arXiv fallback) | Enables the `asknews_news`/`asknews_wiki` providers, and makes them the request's default `providers` (contracts.md A1). |
+| `ASKNEWS_API_KEY`          | unset (`arxiv` replaces `asknews_news` in the defaults) | Enables the `asknews_news`/`asknews_wiki` providers, and adds `asknews_news` to the request's default `providers` (contracts.md A1). |
 | `TYPESAFE_API_KEY`         | unset (gates skipped)           | Enables the Jev-backed family routing, relevance/injection, and claim-support gates. |
 | `JEV_MODEL`                | `jev-latest`                    | The Jev model requested at `/v1/systemone`.          |
 
@@ -522,7 +549,8 @@ group concurrently, and merges the resulting payloads:
 ## What Phase 2 would add
 
 - A frontend and a persistent chat/session layer over the API.
-- Additional source providers beyond AskNews, Wikipedia, and arXiv.
+- Additional source providers beyond AskNews, Google News, Bing News,
+  Wikipedia, and arXiv.
 - Personalization beyond the `history_item` relation already in schema v2
   (e.g. per-user corpora, rather than one shared corpus).
 - Semantic (embedding-based) de-duplication of near-identical claims

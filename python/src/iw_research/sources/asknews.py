@@ -9,9 +9,7 @@ one place so it is easy to adjust if AskNews changes them.
 """
 
 import logging
-import re
 from collections.abc import Iterable, Sequence
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,15 +18,12 @@ import orjson
 
 from ..schema import make_source_id
 from . import SourceDocument
+from .query import keyword_query
 
 logger = logging.getLogger(__name__)
 
 NEWS_URL = "https://api.asknews.app/v1/news/search"
 WIKI_URL = "https://api.asknews.app/v1/wiki/search"
-
-# contracts.md A1: "news_since null means the provider default look-back
-# (AskNews: last 30 days of news)".
-DEFAULT_HOURS_BACK = 720
 
 # AskNews rejects `n_articles` above this with a 400 on the plan tier this worker
 # has been run against (verified live 2026-09-23: 12, the request contract's own
@@ -36,31 +31,6 @@ DEFAULT_HOURS_BACK = 720
 # a single misconfigured or over-eager request from silently zeroing out every news
 # document for the question instead of fetching the plan's actual maximum.
 MAX_N_ARTICLES = 10
-
-_STOPWORDS = frozenset(
-    """
-    a an the is are was were will would can could should of in on at to for and
-    or but with by from that this these those it its as be been being do does
-    did if than then so such not no yes has have had which who whom what when
-    where why how will
-    """.split()
-)
-_WORD_RE = re.compile(r"[A-Za-z0-9']+")
-
-
-def _keyword_query(question: str) -> str:
-    """Build a keyword query from `question` (contracts.md B1's second query).
-
-    Args:
-        question: The research question.
-
-    Returns:
-        `question`'s words, lowercased, with common stopwords removed and
-        order preserved. Falls back to `question` itself if every word is
-        a stopword.
-    """
-    words = [w for w in _WORD_RE.findall(question.lower()) if w not in _STOPWORDS]
-    return " ".join(words) if words else question
 
 
 def _auth_headers(api_key: str) -> dict[str, str]:
@@ -117,7 +87,6 @@ def fetch_news(
     client: httpx.Client,
     api_key: str,
     question: str,
-    news_since: str | None,
     max_articles: int,
     retrieved_at: str,
     extra_queries: Sequence[str] = (),
@@ -129,12 +98,16 @@ def fetch_news(
     (verbatim), and deduplicates the combined results by url across all of
     them. Each article's full text is used if present, else its summary.
 
+    Every query is a `strategy="latest news"` search (AskNews' last 48 hours),
+    which AskNews bills as one call; an archive search costs five. There is no
+    look-back parameter: the strategy fixes the window, so the request's
+    `news_since` plays no part here. Older coverage comes from the free news
+    providers.
+
     Args:
         client: An `httpx.Client` used for every request.
         api_key: `ASKNEWS_API_KEY`, sent as a bearer token.
         question: The research question.
-        news_since: RFC 3339 UTC timestamp to start from, or `None` to use
-            `hours_back=DEFAULT_HOURS_BACK`.
         max_articles: `n_articles` for each query, clamped to `MAX_N_ARTICLES`.
         retrieved_at: RFC 3339 UTC timestamp to stamp onto each document.
         extra_queries: Additional targeted search queries (contracts.md A1);
@@ -142,26 +115,19 @@ def fetch_news(
 
     Returns:
         Deduplicated documents from all queries. Returns `[]` and logs an
-        error for whichever query's request fails; the other queries'
-        results (if any) are still returned.
+        error for whichever query's request fails (including a 402 once the
+        monthly quota is spent); the other queries' results (if any) are
+        still returned.
     """
     params: dict[str, Any] = {
         "n_articles": min(max_articles, MAX_N_ARTICLES),
         "return_type": "dicts",
         "method": "nl",
-        "strategy": "default",
+        "strategy": "latest news",
     }
-    if news_since is not None:
-        params["start_timestamp"] = int(
-            datetime.fromisoformat(news_since.replace("Z", "+00:00"))
-            .astimezone(UTC)
-            .timestamp()
-        )
-    else:
-        params["hours_back"] = DEFAULT_HOURS_BACK
 
     candidates: list[SourceDocument | None] = []
-    for query in (question, _keyword_query(question), *extra_queries):
+    for query in (question, keyword_query(question), *extra_queries):
         try:
             response = client.get(
                 NEWS_URL,

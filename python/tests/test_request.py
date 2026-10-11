@@ -14,12 +14,44 @@ from iw_research.request import (
 
 def test_default_providers_without_asknews_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ASKNEWS_API_KEY", raising=False)
-    assert default_providers() == ["wikipedia", "arxiv"]
+    assert default_providers() == ["google_news", "bing_news", "wikipedia", "arxiv"]
 
 
 def test_default_providers_with_asknews_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ASKNEWS_API_KEY", "k")
-    assert default_providers() == ["asknews_news", "asknews_wiki"]
+    assert default_providers() == [
+        "asknews_news",
+        "google_news",
+        "bing_news",
+        "wikipedia",
+    ]
+
+
+def test_default_providers_never_include_asknews_wiki(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ASKNEWS_API_KEY", "k")
+    assert "asknews_wiki" not in default_providers()
+    monkeypatch.delenv("ASKNEWS_API_KEY")
+    assert "asknews_wiki" not in default_providers()
+
+
+@pytest.mark.parametrize(
+    "provider",
+    ["wikipedia", "arxiv", "asknews_news", "asknews_wiki", "google_news", "bing_news"],
+)
+def test_research_request_accepts_every_known_provider(provider: str) -> None:
+    request = ResearchRequest.model_validate(
+        {"question": "Q?", "providers": [provider]}
+    )
+    assert request.providers == [provider]
+
+
+def test_research_request_still_accepts_news_since() -> None:
+    request = ResearchRequest.model_validate(
+        {"question": "Q?", "news_since": "2026-09-10T08:00:00Z"}
+    )
+    assert request.news_since == "2026-09-10T08:00:00Z"
 
 
 def test_research_request_only_requires_question() -> None:

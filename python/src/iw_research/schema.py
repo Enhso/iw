@@ -193,7 +193,14 @@ class Source(BaseModel):
     id: str
     title: str
     url: str
-    provider: Literal["wikipedia", "arxiv", "asknews_news", "asknews_wiki"]
+    provider: Literal[
+        "wikipedia",
+        "arxiv",
+        "asknews_news",
+        "asknews_wiki",
+        "google_news",
+        "bing_news",
+    ]
     published: str
     retrieved_at: str
     content: str
