@@ -2,7 +2,9 @@
 
 import logging
 import re
+import time
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -57,6 +59,13 @@ def _item(
     )
 
 
+def _feed_of(*urls: str) -> bytes:
+    """A feed with one item per url, titled `T1`, `T2`, ... in order."""
+    return _feed(
+        *(_item(f"T{n}", quote(url, safe="")) for n, url in enumerate(urls, 1))
+    )
+
+
 def _captured_feed(http_fixture_dir: Path) -> bytes:
     return (http_fixture_dir / "bing_news_rss.xml").read_bytes()
 
@@ -98,28 +107,30 @@ def test_parse_items_leaves_the_date_empty_when_unparseable() -> None:
     assert parse_items(feed)[0].date == ""
 
 
-def test_fetch_bundles_headlines_and_extracts_the_top_three_articles(
+def test_fetch_bundles_headlines_and_keeps_the_first_three_articles_that_extract(
     httpx_mock: HTTPXMock, http_fixture_dir: Path
 ) -> None:
     feed = _captured_feed(http_fixture_dir)
-    urls = [item.url for item in parse_items(feed)[:3]]
+    urls = [item.url for item in parse_items(feed)]
     httpx_mock.add_response(url=_search_url(KEYWORDS), content=feed)
-    # The captured article page is served as the first result's body; the
-    # second result answers 200 with a captured bot-wall page, the third
-    # refuses the request.
-    httpx_mock.add_response(
-        url=urls[0], content=(http_fixture_dir / "article.html").read_bytes()
-    )
+    # Four of the nine results are msn.com and are never requested. Of the five
+    # candidates left, the first answers 200 with a captured bot-wall page and
+    # the second refuses the request; the captured article page, served by the
+    # other three, fills the three slots.
     httpx_mock.add_response(
         url=urls[1],
         content=(http_fixture_dir / "article_access_denied.html").read_bytes(),
     )
     httpx_mock.add_response(url=urls[2], status_code=403)
+    for url in urls[6:]:
+        httpx_mock.add_response(
+            url=url, content=(http_fixture_dir / "article.html").read_bytes()
+        )
 
     with httpx.Client() as client:
         docs = fetch(client, QUESTION, RETRIEVED_AT)
 
-    bundle, article = docs
+    bundle, *articles = docs
     assert bundle.provider == "bing_news"
     assert bundle.id.startswith("src:bing_news:")
     assert bundle.title == f"Bing News headlines: {KEYWORDS}"
@@ -133,35 +144,98 @@ def test_fetch_bundles_headlines_and_extracts_the_top_three_articles(
         "US Secretary of State Rubio"
     )
 
+    assert [a.url for a in articles] == urls[6:]
+    article = articles[0]
     assert article.provider == "bing_news"
-    assert article.url == urls[0] == FIRST_ARTICLE_URL
-    assert article.title == "Trump invites Putin to Miami G20: Why that matters"
-    assert article.published == "2026-09-24"
+    assert article.title == "U.S. Invites Putin to G20, Attendance Uncertain"
+    assert article.published == "2026-09-26"
     assert "G20" in article.text
     assert "<" not in article.text
     assert MIN_ARTICLE_CHARS < len(article.text) <= MAX_ARTICLE_CHARS
     assert article.id != bundle.id
 
 
-def test_fetch_requests_only_the_top_three_articles_with_a_15_second_timeout(
-    httpx_mock: HTTPXMock, http_fixture_dir: Path
+def test_fetch_requests_the_first_six_non_msn_items_with_a_15_second_timeout(
+    httpx_mock: HTTPXMock,
 ) -> None:
-    feed = _captured_feed(http_fixture_dir)
-    items = parse_items(feed)
-    assert len(items) > 3
-    httpx_mock.add_response(url=_search_url(KEYWORDS), content=feed)
-    for item in items[:3]:
-        httpx_mock.add_response(url=item.url, content=EMPTY_PAGE)
+    skipped = ["https://www.msn.com/a", "https://uk.msn.com/b"]
+    # `notmsn.com` only ends in "msn.com": it is not an msn.com subdomain.
+    candidates = [
+        "https://example.com/1",
+        "https://example.com/2",
+        "https://notmsn.com/3",
+        "https://example.com/4",
+        "https://example.com/5",
+        "https://example.com/6",
+    ]
+    beyond_the_sixth = "https://example.com/7"
+    feed = _feed_of(
+        skipped[0], candidates[0], skipped[1], *candidates[1:], beyond_the_sixth
+    )
+    httpx_mock.add_response(url=_search_url("q"), content=feed)
+    for url in candidates:
+        httpx_mock.add_response(url=url, content=EMPTY_PAGE)
 
     with httpx.Client() as client:
-        fetch(client, QUESTION, RETRIEVED_AT)
+        fetch(client, "q", RETRIEVED_AT)
 
     requests = httpx_mock.get_requests()
-    assert [str(r.url) for r in requests[1:]] == [item.url for item in items[:3]]
+    # The articles are fetched in parallel, so only the set of urls is fixed.
+    assert sorted(str(r.url) for r in requests[1:]) == sorted(candidates)
     for request in requests:
         assert request.headers["User-Agent"] == "Mozilla/5.0"
     for request in requests[1:]:
         assert request.extensions["timeout"]["read"] == ARTICLE_TIMEOUT == 15.0
+
+
+def test_fetch_keeps_the_first_three_extractable_articles_in_feed_order(
+    httpx_mock: HTTPXMock, http_fixture_dir: Path
+) -> None:
+    article_page = (http_fixture_dir / "article.html").read_bytes()
+    urls = [f"https://example.com/{n}" for n in range(1, 7)]
+    httpx_mock.add_response(url=_search_url("q"), content=_feed_of(*urls))
+
+    def slow_response(request: httpx.Request) -> httpx.Response:
+        time.sleep(0.2)
+        return httpx.Response(200, content=article_page)
+
+    # The first candidate finishes last but still comes first.
+    httpx_mock.add_callback(slow_response, url=urls[0])
+    for url in urls[1:]:
+        httpx_mock.add_response(url=url, content=article_page)
+
+    with httpx.Client() as client:
+        docs = fetch(client, "q", RETRIEVED_AT)
+
+    assert [d.url for d in docs[1:]] == urls[:3]
+    # All six extract, so the last three were fetched and then dropped.
+    assert len(httpx_mock.get_requests()) == 1 + len(urls)
+
+
+def test_fetch_skips_failed_and_short_candidates_without_looking_past_the_sixth(
+    httpx_mock: HTTPXMock,
+    caplog: pytest.LogCaptureFixture,
+    http_fixture_dir: Path,
+) -> None:
+    article_page = (http_fixture_dir / "article.html").read_bytes()
+    bot_wall = (http_fixture_dir / "article_access_denied.html").read_bytes()
+    stub = b"<html><body><p>Short stub.</p></body></html>"
+    urls = [f"https://example.com/{n}" for n in range(1, 8)]
+    httpx_mock.add_response(url=_search_url("q"), content=_feed_of(*urls))
+    httpx_mock.add_response(url=urls[0], status_code=403)
+    httpx_mock.add_exception(httpx.ReadTimeout("slow article"), url=urls[1])
+    httpx_mock.add_response(url=urls[2], content=bot_wall)
+    httpx_mock.add_response(url=urls[3], content=article_page)
+    httpx_mock.add_response(url=urls[4], content=stub)
+    httpx_mock.add_response(url=urls[5], content=article_page)
+    # The seventh item is never tried, even though fewer than three extracted.
+    with caplog.at_level(logging.WARNING), httpx.Client() as client:
+        docs = fetch(client, "q", RETRIEVED_AT)
+
+    assert [d.url for d in docs[1:]] == [urls[3], urls[5]]
+    assert urls[6] not in {str(r.url) for r in httpx_mock.get_requests()}
+    for url in (urls[0], urls[1], urls[2], urls[4]):
+        assert any(url in r.getMessage() for r in caplog.records)
 
 
 def test_fetch_follows_redirects_when_fetching_an_article(
