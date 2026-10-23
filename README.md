@@ -548,7 +548,11 @@ group concurrently, and merges the resulting payloads:
 
 ## What Phase 2 would add
 
-- A frontend and a persistent chat/session layer over the API.
+- A visualization tool for the Workbench's data: corpus, claims and their
+  evidence, families. Wanted (Hatim, 2026-10-23); it needs its own design
+  before any build. The frontend in `docs/plan.md` and `docs/todo.md` belongs
+  to the superseded GitOps design and is not that design.
+- A persistent chat/session layer over the API.
 - Additional source providers beyond AskNews, Google News, Bing News,
   Wikipedia, and arXiv.
 - Personalization beyond the `history_item` relation already in schema v2
